@@ -1,6 +1,6 @@
 # cloudai-scan
 
-Find ungoverned AI usage on Cloudflare, from your terminal or CI. No account needed for the repository scan; a read-only API token for the account scan. Nothing is uploaded anywhere.
+The free local scanner from [Cloud AI Security](https://cloudaisecurity.com). Find ungoverned AI usage on Cloudflare, from your terminal or CI. No account needed for the repository scan; a read-only API token for the account scan. It runs on your machine and nothing is uploaded anywhere.
 
 ```
 $ cloudai-scan repo .
@@ -84,6 +84,8 @@ The connectors can only send `GET` requests to `api.openai.com/v1/organization`,
 
 AI Gateway, Access, rate limiting and Workers Logs are all free. Most AI incidents on Workers are a Worker that calls a provider directly with a key in a secret, an MCP server nobody put behind Access, or an LLM endpoint with no rate limit. This tool finds those in a minute.
 
-Want the same checks on a trust page your enterprise buyers can read, plus OpenAI and Anthropic organisation checks? That is [cloudaisecurity.com](https://cloudaisecurity.com).
+## Local scanner and hosted product
+
+`cloudai-scan` is the local tool: it reads a repository or one Cloudflare account, prints results, and sends nothing to us. [Cloud AI Security](https://cloudaisecurity.com) is the hosted product: it runs the same published rules on a schedule, adds OpenAI and Anthropic organization checks, keeps history, and turns results into a dated trust page and an AI questionnaire appendix. Both produce configuration evidence, not an audit, certification or runtime protection.
 
 MIT © AINOW Group OÜ

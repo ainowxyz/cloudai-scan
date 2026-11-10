@@ -113,7 +113,7 @@ export function buildAnswers(input: AnswerInput): BuiltAnswers {
         provider: null,
         status: "pass",
         text: `Provider accounts connected and checked: ${names.join(", ")}.`,
-        source: "Connections configured in CloudAISecurity",
+        source: "Connections configured in Cloud AI Security",
         limits: "Lists the accounts connected for checking. A provider you use but have not connected does not appear.",
         checkedAt: null,
       });

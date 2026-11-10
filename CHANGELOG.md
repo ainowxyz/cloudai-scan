@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — 2026-11-10
+
+- Display name is now Cloud AI Security. Package names, the `cloudai-scan` command and rule IDs are unchanged.
+- README explains the difference between the local scanner and the hosted product.
+
 ## 0.2.0 — 2026-11-10
 
 Rules version 2026.11.3. Results now say only what was read.
