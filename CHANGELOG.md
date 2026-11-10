@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 — 2026-11-10
+
+- Answers: the list of connected accounts is labelled as product configuration (`origin: "configuration"`), not as an API observation.
+- The `complete` answer state is labelled "Statement supplied": it is a mechanical state, not verification.
+
 ## 0.2.1 — 2026-11-10
 
 - Display name is now Cloud AI Security. Package names, the `cloudai-scan` command and rule IDs are unchanged.

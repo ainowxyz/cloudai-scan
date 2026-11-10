@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANSWER_STATES, buildAnswers, completenessLine, genericAiAppendix, runChecks, type AnswerResultInput, type CheckResult, type OpenAIFacts } from "../src/index.js";
+import { ANSWER_STATE_LABEL, ANSWER_STATES, buildAnswers, completenessLine, genericAiAppendix, runChecks, type AnswerResultInput, type CheckResult, type OpenAIFacts } from "../src/index.js";
 
 const NOW = "2026-11-03T00:00:00.000Z";
 const toInput = (rs: CheckResult[], connection?: string): AnswerResultInput[] => rs.map((r) => ({ checkId: r.id, provider: r.provider, status: r.status, summary: r.summary, observed: r.observed, connection }));
@@ -55,7 +55,9 @@ describe("buildAnswers", () => {
 
   it("GAI-02 names the connected providers instead of returning nothing", () => {
     const a = get(buildAnswers({ providers: ["openai", "anthropic", "cloudflare-ai-gateway"], results: gateway, statements: [] }), "GAI-02");
-    expect(a.observed[0]!.text).toBe("Provider accounts connected and checked: OpenAI, Anthropic, Cloudflare AI Gateway.");
+    expect(a.observed[0]!.text).toBe("Connected for checking: OpenAI, Anthropic, Cloudflare AI Gateway.");
+    expect(a.observed[0]!.origin).toBe("configuration");
+    expect(a.observed[1]!.origin).toBe("provider_api");
     expect(a.observed.some((o) => o.text.includes("Providers in gateway traffic, last 30 days: openai"))).toBe(true);
     expect(a.state).toBe("partial");
     expect(a.missing[0]).toMatch(/complete/);
@@ -114,7 +116,7 @@ describe("buildAnswers", () => {
     const b = buildAnswers({ providers: ["openai", "openai", "cloudflare-ai-gateway"], results: [...toInput(runChecks("openai", facts), "EU org"), ...toInput(runChecks("openai", facts), "US org"), ...gateway], statements: [] });
     const a = get(b, "GAI-03");
     expect(a.observed.filter((o) => o.checkId === "OAI-010").map((o) => o.text.split(":")[0])).toEqual(["OpenAI (EU org)", "OpenAI (US org)"]);
-    expect(get(b, "GAI-02").observed[0]!.text).toBe("Provider accounts connected and checked: OpenAI, Cloudflare AI Gateway.");
+    expect(get(b, "GAI-02").observed[0]!.text).toBe("Connected for checking: OpenAI, Cloudflare AI Gateway.");
   });
 
   it("conflicting statement: a statement next to a failing check is flagged for review", () => {
@@ -135,9 +137,14 @@ describe("buildAnswers", () => {
     expect(text).not.toMatch(/jane-laptop|cto@example\.com|prod\b/);
   });
 
+  it("a supplied statement is labelled as supplied, never as verified", () => {
+    expect(ANSWER_STATE_LABEL.complete).toBe("Statement supplied");
+    for (const label of Object.values(ANSWER_STATE_LABEL)) expect(label).not.toMatch(/verified|approved|complete/i);
+  });
+
   it("summarizes completeness", () => {
     const b = buildAnswers({ providers: ["openai"], results: openai, statements: [stmt("GAI-01", "Reply drafting.")] });
-    expect(completenessLine(b.counts)).toMatch(/^1 complete, \d+ partial, \d+ need your statement, 0 not readable, 0 not applicable$/);
+    expect(completenessLine(b.counts)).toMatch(/^1 with a statement supplied, \d+ partial, \d+ needing your statement, 0 not readable, 0 not applicable$/);
     expect(b.incomplete).toBe(24);
   });
 });

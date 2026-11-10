@@ -7,8 +7,9 @@ import { repoChecks } from "./repo.js";
 import type { CheckStatus, Provider } from "./types.js";
 
 /**
- * How finished one answer is.
- * complete: you have stated your answer (provider evidence, where it exists, is attached to it).
+ * How finished one answer is. This is a mechanical state: it says which parts are present.
+ * It never means that anyone has verified a statement, and it is separate from a rule's pass or fail.
+ * complete: the required statement has been supplied (provider evidence, where it exists, is attached to it).
  * partial: provider settings were read, but the part only you can state is missing.
  * needs_statement: nothing was read for this question and you have not stated an answer.
  * not_readable: checks exist for this question but none could be read, and you have not stated an answer.
@@ -19,7 +20,7 @@ export type AnswerState = "complete" | "partial" | "needs_statement" | "not_read
 export const ANSWER_STATES: AnswerState[] = ["complete", "partial", "needs_statement", "not_readable", "not_applicable"];
 
 export const ANSWER_STATE_LABEL: Record<AnswerState, string> = {
-  complete: "Complete",
+  complete: "Statement supplied",
   partial: "Partial: statement needed",
   needs_statement: "Needs your statement",
   not_readable: "Not readable",
@@ -55,6 +56,11 @@ export interface ObservedLine {
   source: string;
   /** What the observation does not show. */
   limits: string;
+  /**
+   * Where the line comes from. "provider_api": read from the provider's API by a rule.
+   * "configuration": derived from what is configured in the product, such as the list of connected accounts.
+   */
+  origin: "provider_api" | "configuration";
   /** When it was read from the provider, if known. */
   checkedAt: string | null;
 }
@@ -102,19 +108,21 @@ export function buildAnswers(input: AnswerInput): BuiltAnswers {
       const def = CATALOGUE.get(r.checkId)!;
       const who = `${LABEL[r.provider] ?? r.provider}${r.connection ? ` (${r.connection})` : ""}`;
       const text = r.observed.length ? r.observed.join("; ") : r.summary.replace(/\.$/, "");
-      return { checkId: r.checkId, provider: r.provider, status: r.status, text: `${who}: ${text}.`, source: def.source, limits: def.limits, checkedAt: r.checkedAt ?? null };
+      return { checkId: r.checkId, provider: r.provider, status: r.status, text: `${who}: ${text}.`, source: def.source, limits: def.limits, origin: "provider_api", checkedAt: r.checkedAt ?? null };
     });
 
-    // The provider list is observable from the connections themselves.
+    // The list of connected accounts comes from the product's own configuration, not from a provider API,
+    // so it is labelled as an inventory and never as an API observation.
     if (q.id === "GAI-02" && input.providers.length > 0) {
       const names = [...new Set(input.providers.map((p) => LABEL[p] ?? p))];
       observed.unshift({
         checkId: null,
         provider: null,
         status: "pass",
-        text: `Provider accounts connected and checked: ${names.join(", ")}.`,
+        text: `Connected for checking: ${names.join(", ")}.`,
         source: "Connections configured in Cloud AI Security",
-        limits: "Lists the accounts connected for checking. A provider you use but have not connected does not appear.",
+        limits: "Lists what is connected for checking. A provider you use but have not connected does not appear.",
+        origin: "configuration",
         checkedAt: null,
       });
     }
@@ -144,14 +152,13 @@ export function buildAnswers(input: AnswerInput): BuiltAnswers {
   return { answers, counts, incomplete: answers.filter((a) => a.state !== "complete" && a.state !== "not_applicable").length };
 }
 
-/** "9 complete, 8 partial, 6 need your statement, 2 not readable" */
+/** "9 with a statement supplied, 8 partial, 6 needing your statement, 2 not readable, 0 not applicable" */
 export function completenessLine(counts: Record<AnswerState, number>): string {
-  const parts = [
-    `${counts.complete} complete`,
+  return [
+    `${counts.complete} with a statement supplied`,
     `${counts.partial} partial`,
-    `${counts.needs_statement} ${counts.needs_statement === 1 ? "needs" : "need"} your statement`,
+    `${counts.needs_statement} needing your statement`,
     `${counts.not_readable} not readable`,
     `${counts.not_applicable} not applicable`,
-  ];
-  return parts.join(", ");
+  ].join(", ");
 }
