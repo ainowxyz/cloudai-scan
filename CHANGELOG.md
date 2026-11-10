@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4 — 2026-11-10
+
+- Cloudflare account: when the cf-llm label response carries no operation count, the recorded reason now states what the count field contained, so the cause can be diagnosed. The result stays "not readable"; a missing count is never read as zero.
+
 ## 0.2.3 — 2026-11-10
 
 Rules version 2026.11.4. Found by testing against live accounts.

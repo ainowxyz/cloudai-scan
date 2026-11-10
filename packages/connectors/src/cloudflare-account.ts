@@ -91,7 +91,7 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
         );
         const counted = label?.result?.mapped_resources?.operations;
         const llmOperationCount = typeof counted === "number" ? counted : undefined;
-        if (label && llmOperationCount === undefined) errors.push({ endpoint: `GET /zones/${z.id}/api_gateway/labels/managed/cf-llm`, status: 200, message: "The response carried no operation count." });
+        if (label && llmOperationCount === undefined) errors.push({ endpoint: `GET /zones/${z.id}/api_gateway/labels/managed/cf-llm`, status: 200, message: `The response carried no operation count (mapped_resources: ${label.result?.mapped_resources === undefined ? "absent" : JSON.stringify(label.result.mapped_resources).slice(0, 80)}).` });
         let llmOperations: ZoneFact["llmOperations"] = llmOperationCount === 0 ? [] : undefined;
         if (llmOperationCount && llmOperationCount > 0) {
           // The operations list does not document a label field. If it carries one, use it; otherwise the list stays unread.
