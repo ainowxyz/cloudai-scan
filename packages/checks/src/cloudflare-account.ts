@@ -1,6 +1,6 @@
 import { looksLikeMcp, PROVIDER_KEY_NAME } from "./patterns.js";
 import type { CheckDefinition, CloudflareAccountFacts, WorkerFact } from "./types.js";
-import { pluralise } from "./util.js";
+import { agree, pluralise } from "./util.js";
 
 const AI_BINDING_TYPES = new Set(["ai", "vectorize", "ai_search", "autorag"]);
 
@@ -19,6 +19,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "Workers hold provider API keys directly",
     description: "A Worker secret named like a provider key means the Worker calls the provider itself, outside AI Gateway's logging, limits and key storage.",
     severity: "medium",
+    source: "GET /accounts/{id}/workers/scripts/{name}/settings: bindings (secret names only)",
     remediation: "Store the key in AI Gateway (BYOK) and call the gateway endpoint; delete the Worker secret.",
     answers: [{ framework: "generic-ai", itemId: "GAI-04" }, { framework: "generic-ai", itemId: "GAI-14" }],
     evaluate: (f) => {
@@ -34,6 +35,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "AI Workers have observability enabled",
     description: "Without Workers Logs there is no record of what an AI Worker did when something goes wrong.",
     severity: "low",
+    source: "GET /accounts/{id}/workers/scripts/{name}/settings: observability.enabled",
     remediation: "Set observability.enabled = true in the Worker's configuration.",
     answers: [{ framework: "generic-ai", itemId: "GAI-20" }],
     evaluate: (f) => {
@@ -43,7 +45,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
       if (known.length === 0) return { status: "unverifiable", summary: "Observability settings not readable.", evidence: [] };
       const off = known.filter((w) => !w.observabilityEnabled).map((w) => w.name);
       return off.length === 0
-        ? { status: "pass", summary: `All ${pluralise(ai.length, "AI Worker")} have observability on.`, evidence: [] }
+        ? { status: "pass", summary: `${ai.length === 1 ? "The AI Worker has" : `All ${ai.length} AI Workers have`} observability on.`, evidence: [] }
         : { status: "fail", summary: `${pluralise(off.length, "AI Worker")} without observability.`, evidence: off.slice(0, 15) };
     },
   },
@@ -53,6 +55,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "AI Workers are not exposed only on workers.dev",
     description: "A workers.dev hostname has no zone-level WAF rules, rate limiting rules or Access policies.",
     severity: "medium",
+    source: "GET /accounts/{id}/workers/scripts/{name}/subdomain: enabled; Workers routes and custom domains",
     remediation: "Attach a custom domain or route on a zone and disable the workers.dev subdomain for the Worker.",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
@@ -72,6 +75,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "MCP servers are behind Cloudflare Access",
     description: "An MCP server reachable without Access lets any client enumerate and call its tools.",
     severity: "high",
+    source: "Workers routes and custom domains; GET /accounts/{id}/access/apps: domain",
     remediation: "Create a Cloudflare Access application for the MCP hostname, or require OAuth inside the server.",
     answers: [{ framework: "generic-ai", itemId: "GAI-14" }],
     evaluate: (f) => {
@@ -95,6 +99,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "LLM endpoints have a rate limiting rule",
     description: "Cloudflare labels LLM endpoints automatically (cf-llm). Each should be covered by a rate limiting rule.",
     severity: "high",
+    source: "API Shield operations labelled cf-llm; http_ratelimit ruleset: expression",
     remediation: "Create a rate limiting rule matching the endpoint path (1 rule is included on Free, 2 on Pro, 5 on Business).",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
@@ -124,6 +129,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "Zones with LLM endpoints have bot protection or custom rules",
     description: "LLM endpoints attract scripted abuse; at least Bot Fight Mode or a custom rule should apply.",
     severity: "medium",
+    source: "GET /zones/{id}/bot_management: fight_mode; http_request_firewall_custom ruleset",
     remediation: "Enable Bot Fight Mode (Free) or Super Bot Fight Mode, or add a custom rule challenging non-browser traffic to the endpoint.",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
@@ -143,6 +149,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "AI surface inventory",
     description: "Workers using AI bindings or provider keys, and zones with LLM endpoints.",
     severity: "info",
+    source: "Workers settings and API Shield operations labelled cf-llm",
     remediation: "",
     answers: [{ framework: "generic-ai", itemId: "GAI-21" }],
     evaluate: (f) => {

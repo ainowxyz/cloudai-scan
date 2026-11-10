@@ -1,6 +1,6 @@
 {
   "name": "@cloudaisecurity/checks",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic, versioned checks over AI provider configuration facts, with questionnaire mappings.",
   "license": "MIT",
   "type": "module",

@@ -10,7 +10,7 @@ export * from "./questionnaires.js";
 export * from "./patterns.js";
 export { openaiChecks, anthropicChecks, aiGatewayChecks, cloudflareAccountChecks, repoChecks };
 
-export const CHECKS_VERSION = "2026.11.1";
+export const CHECKS_VERSION = "2026.11.2";
 
 const registry: { [P in Provider]: CheckDefinition<FactsFor<P>>[] } = {
   openai: openaiChecks,
@@ -38,6 +38,7 @@ export function runChecks<P extends Provider>(provider: P, facts: FactsFor<P>): 
         provider: def.provider,
         severity: def.severity,
         title: def.title,
+        source: def.source,
         status: r.status,
         summary: r.summary,
         evidence: r.evidence,
@@ -50,6 +51,7 @@ export function runChecks<P extends Provider>(provider: P, facts: FactsFor<P>): 
         provider: def.provider,
         severity: def.severity,
         title: def.title,
+        source: def.source,
         status: "unverifiable",
         summary: `Check could not run: ${err instanceof Error ? err.message : String(err)}`,
         evidence: [],

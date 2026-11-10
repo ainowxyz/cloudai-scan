@@ -61,3 +61,21 @@ describe("repo checks", () => {
     expect(by("REPO-006").status).toBe("fail");
   });
 });
+
+describe("catalogue completeness", () => {
+  it("every check names its source and singular summaries agree", async () => {
+    const { allChecks } = await import("../src/index.js");
+    for (const c of allChecks()) expect(c.source, c.id).toMatch(/\S/);
+  });
+  it("uses singular verbs for a count of one", () => {
+    const one: RepoFacts = {
+      root: "/x",
+      files: [{ path: "a.ts", imports: ["openai"], hosts: [], hasAiRun: true, hasGatewayRef: false, hasMcpServer: false, hasAccessCheck: false }],
+      wrangler: [],
+      collectedAt: NOW,
+    };
+    const r = runChecks("repo", one);
+    expect(r.find((x) => x.id === "REPO-002")!.summary).toBe("1 file uses a provider SDK without a gateway reference.");
+    expect(r.find((x) => x.id === "REPO-003")!.summary).toBe("1 file calls Workers AI without a gateway id.");
+  });
+});

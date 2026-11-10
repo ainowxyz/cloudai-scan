@@ -1,5 +1,5 @@
 import type { AnthropicFacts, CheckDefinition } from "./types.js";
-import { olderThanDays, pluralise } from "./util.js";
+import { agree, olderThanDays, pluralise } from "./util.js";
 
 const OLD_KEY_DAYS = 365;
 const STALE_INVITE_DAYS = 30;
@@ -13,6 +13,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
     title: "No active API key in an archived workspace",
     description: "Keys that outlive their workspace are forgotten credentials.",
     severity: "medium",
+    source: "GET /v1/organizations/api_keys: status, workspace_id; GET /v1/organizations/workspaces: archived_at",
     remediation: "Deactivate keys belonging to archived workspaces in the Claude Console.",
     answers: [{ framework: "generic-ai", itemId: "GAI-12" }],
     evaluate: (f) => {
@@ -20,7 +21,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
       const orphans = f.apiKeys.filter((k) => k.status === "active" && k.workspaceId && archived.has(k.workspaceId)).map((k) => k.name);
       return orphans.length === 0
         ? { status: "pass", summary: "No active keys in archived workspaces.", evidence: [] }
-        : { status: "fail", summary: `${pluralise(orphans.length, "active key")} in archived workspaces.`, evidence: orphans.slice(0, 10) };
+        : { status: "fail", summary: `${pluralise(orphans.length, "active key")} ${agree(orphans.length, "belongs", "belong")} to an archived workspace.`, evidence: orphans.slice(0, 10) };
     },
   },
   {
@@ -29,6 +30,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
     title: "Production keys live in a dedicated workspace",
     description: "Keys in the default workspace cannot be scoped, limited or reported separately.",
     severity: "medium",
+    source: "GET /v1/organizations/api_keys: workspace_id",
     remediation: "Create a workspace per environment and issue keys there; deactivate default-workspace keys.",
     answers: [{ framework: "generic-ai", itemId: "GAI-14" }],
     evaluate: (f) => {
@@ -44,6 +46,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
     title: `No active key older than ${OLD_KEY_DAYS} days`,
     description: "Long-lived keys should be rotated.",
     severity: "low",
+    source: "GET /v1/organizations/api_keys: created_at",
     remediation: "Rotate keys older than a year.",
     answers: [{ framework: "generic-ai", itemId: "GAI-13" }],
     evaluate: (f) => {
@@ -59,6 +62,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
     title: "Admin count is small and invites are not stale",
     description: "Few admins and no lingering invitations limit account takeover exposure.",
     severity: "low",
+    source: "GET /v1/organizations/users: role; GET /v1/organizations/invites: status, invited_at",
     remediation: `Keep admins to ${MAX_ADMINS} or fewer and revoke invitations older than ${STALE_INVITE_DAYS} days.`,
     answers: [{ framework: "generic-ai", itemId: "GAI-11" }],
     evaluate: (f) => {
@@ -67,7 +71,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
       const evidence = [`${pluralise(admins, "admin/owner")}`, `${pluralise(stale, "stale pending invite")}`];
       return admins <= MAX_ADMINS && stale === 0
         ? { status: "pass", summary: "Admin count and invitations are within policy.", evidence }
-        : { status: "fail", summary: `${admins} admins and ${stale} stale invites.`, evidence };
+        : { status: "fail", summary: `${pluralise(admins, "admin")} and ${pluralise(stale, "stale invite")}.`, evidence };
     },
   },
   {
@@ -76,6 +80,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
     title: "Workspace spend limits",
     description: "Workspace spend limits cap runaway usage. Readable only on plans that expose them.",
     severity: "medium",
+    source: "Workspace spend limits (not exposed by the Admin API today)",
     remediation: "Set a monthly spend limit on each production workspace in the Claude Console.",
     answers: [{ framework: "generic-ai", itemId: "GAI-22" }],
     evaluate: () => ({ status: "unverifiable", summary: "Workspace spend limits are not exposed by the Admin API for this organization.", evidence: [] }),
@@ -86,6 +91,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
     title: "Models used in the last 30 days",
     description: "Inventory of models actually called, from the usage analytics API.",
     severity: "info",
+    source: "GET /v1/organizations/analytics/usage: model, last 30 days",
     remediation: "",
     answers: [{ framework: "generic-ai", itemId: "GAI-03" }],
     evaluate: (f) =>

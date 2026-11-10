@@ -24,6 +24,8 @@ export interface CheckResult {
   status: CheckStatus;
   severity: Severity;
   title: string;
+  /** The provider API call(s) and field(s) read. */
+  source: string;
   /** One sentence a buyer can read. */
   summary: string;
   /** Short evidence lines (never secrets, never prompt content). */
@@ -38,6 +40,8 @@ export interface CheckDefinition<F> {
   title: string;
   description: string;
   severity: Severity;
+  /** The provider API call(s) and field(s) this check reads, shown next to every result. */
+  source: string;
   remediation: string;
   answers: QuestionnaireRef[];
   evaluate: (facts: F) => Pick<CheckResult, "status" | "summary" | "evidence">;

@@ -1,5 +1,5 @@
 import type { CheckDefinition, OpenAIFacts } from "./types.js";
-import { olderThanDays, pluralise } from "./util.js";
+import { agree, olderThanDays, pluralise } from "./util.js";
 
 const UNUSED_DAYS = 90;
 const OLD_KEY_DAYS = 365;
@@ -13,6 +13,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: "Audit logging is enabled",
     description: "The OpenAI organization records API key, project, user and login lifecycle events.",
     severity: "high",
+    source: "GET /v1/organization/audit_logs: whether events are returned",
     remediation: "In OpenAI platform settings, open Organization > General and enable audit logging. Once on it cannot be turned off.",
     answers: [{ framework: "generic-ai", itemId: "GAI-20" }],
     evaluate: (f) => {
@@ -29,6 +30,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: `No API key unused for ${UNUSED_DAYS}+ days`,
     description: "Stale keys are the most common path to silent credential leaks.",
     severity: "medium",
+    source: "GET /v1/organization/projects/{id}/api_keys: last_used_at, created_at",
     remediation: "Delete keys that have not been used in 90 days from each project's API keys page.",
     answers: [{ framework: "generic-ai", itemId: "GAI-12" }],
     evaluate: (f) => {
@@ -48,6 +50,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: `No API key older than ${OLD_KEY_DAYS} days`,
     description: "Long-lived keys should be rotated.",
     severity: "low",
+    source: "GET /v1/organization/projects/{id}/api_keys: created_at",
     remediation: "Rotate keys older than a year: create a replacement, deploy it, then delete the old key.",
     answers: [{ framework: "generic-ai", itemId: "GAI-13" }],
     evaluate: (f) => {
@@ -63,6 +66,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: "Spend controls are configured",
     description: "An organization spend limit or per-project spend alerts cap runaway usage.",
     severity: "medium",
+    source: "Organization spend limit and project spend alerts: threshold_amount",
     remediation: "Set an organization monthly spend limit, or add spend alerts on every active project.",
     answers: [{ framework: "generic-ai", itemId: "GAI-22" }],
     evaluate: (f) => {
@@ -73,7 +77,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const without = f.projects.filter((p) => p.status === "active" && (p.spendAlertCount ?? 0) === 0).map((p) => p.name);
       return without.length === 0
         ? { status: "pass", summary: "Every active project has at least one spend alert.", evidence: [] }
-        : { status: "fail", summary: `${pluralise(without.length, "active project")} without spend limit or alert.`, evidence: without.slice(0, 10) };
+        : { status: "fail", summary: `${pluralise(without.length, "active project")} without a spend limit or alert.`, evidence: without.slice(0, 10) };
     },
   },
   {
@@ -82,6 +86,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: "Production projects restrict usable models",
     description: "An allow-list prevents accidental use of unapproved models.",
     severity: "low",
+    source: "Project model permissions: mode",
     remediation: "Set model permissions to an allow-list on each production project.",
     answers: [{ framework: "generic-ai", itemId: "GAI-05" }],
     evaluate: (f) => {
@@ -99,6 +104,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: "Data retention is set explicitly per project",
     description: "Projects inheriting an unstated organization default make retention answers ambiguous.",
     severity: "medium",
+    source: "Project data retention: retention_type",
     remediation: "Set an explicit retention policy on each production project.",
     answers: [{ framework: "generic-ai", itemId: "GAI-08" }],
     evaluate: (f) => {
@@ -107,7 +113,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const inherited = known.filter((p) => p.status === "active" && p.dataRetention === "organization_default").map((p) => p.name);
       return inherited.length === 0
         ? { status: "pass", summary: "All active projects set retention explicitly.", evidence: [] }
-        : { status: "fail", summary: `${pluralise(inherited.length, "active project")} inherit the organization default retention.`, evidence: inherited.slice(0, 10) };
+        : { status: "fail", summary: `${pluralise(inherited.length, "active project")} ${agree(inherited.length, "inherits", "inherit")} the organization default retention.`, evidence: inherited.slice(0, 10) };
     },
   },
   {
@@ -116,6 +122,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: "Owner count is small and invites are not stale",
     description: "Few owners and no lingering invitations limit account takeover exposure.",
     severity: "low",
+    source: "GET /v1/organization/users: role; GET /v1/organization/invites: status, invited_at",
     remediation: `Keep owners to ${MAX_OWNERS} or fewer and revoke invitations older than ${STALE_INVITE_DAYS} days.`,
     answers: [{ framework: "generic-ai", itemId: "GAI-11" }],
     evaluate: (f) => {
@@ -124,7 +131,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const evidence = [`${pluralise(owners, "owner")}`, `${pluralise(stale, "stale pending invite")}`];
       return owners <= MAX_OWNERS && stale === 0
         ? { status: "pass", summary: "Owner count and invitations are within policy.", evidence }
-        : { status: "fail", summary: `${owners} owners and ${stale} stale invites.`, evidence };
+        : { status: "fail", summary: `${pluralise(owners, "owner")} and ${pluralise(stale, "stale invite")}.`, evidence };
     },
   },
   {
@@ -133,13 +140,14 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: "Production keys belong to service accounts",
     description: "Keys owned by individual users disappear or leak when people leave.",
     severity: "medium",
+    source: "GET /v1/organization/projects/{id}/api_keys: owner.type",
     remediation: "Create a service account per workload and move production traffic to its keys.",
     answers: [{ framework: "generic-ai", itemId: "GAI-12" }],
     evaluate: (f) => {
       const userOwned = f.projects.flatMap((p) => p.apiKeys.filter((k) => k.ownerType === "user").map((k) => `${p.name}: ${k.name ?? k.id}`));
       return userOwned.length === 0
         ? { status: "pass", summary: "All API keys are owned by service accounts.", evidence: [] }
-        : { status: "fail", summary: `${pluralise(userOwned.length, "API key")} owned by individual users.`, evidence: userOwned.slice(0, 10) };
+        : { status: "fail", summary: `${pluralise(userOwned.length, "API key")} ${agree(userOwned.length, "is owned by an individual user", "are owned by individual users")}.`, evidence: userOwned.slice(0, 10) };
     },
   },
   {
@@ -148,6 +156,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: "Rate limits are tuned on active projects",
     description: "Project-level rate limits below the organization default contain abuse and bugs.",
     severity: "low",
+    source: "GET /v1/organization/projects/{id}/rate_limits",
     remediation: "Lower rate limits on projects serving public traffic.",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
@@ -165,6 +174,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     title: "Models used in the last 30 days",
     description: "Inventory of models actually called, from usage data.",
     severity: "info",
+    source: "GET /v1/organization/usage/completions: model, last 30 days",
     remediation: "",
     answers: [{ framework: "generic-ai", itemId: "GAI-03" }],
     evaluate: (f) =>

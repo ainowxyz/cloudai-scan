@@ -1,6 +1,6 @@
 {
   "name": "@cloudaisecurity/connectors",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Read-only connectors that collect configuration facts from AI providers (OpenAI, Anthropic, Cloudflare AI Gateway).",
   "type": "module",

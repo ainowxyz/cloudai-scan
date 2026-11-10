@@ -27,6 +27,7 @@ export function renderText(sections: Section[], version: string): string {
       if (r.status === "fail") {
         for (const e of r.evidence.slice(0, 8)) lines.push(`      - ${e}`);
         if (r.evidence.length > 8) lines.push(`      … ${r.evidence.length - 8} more`);
+        lines.push(color(90, `      source: ${r.source}`));
         if (r.remediation) lines.push(color(36, `      fix: ${r.remediation}`));
       }
     }
