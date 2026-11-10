@@ -10,6 +10,7 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     description: "Source code that targets api.openai.com, api.anthropic.com and similar bypasses any gateway, so those calls have no central logging, limits or key management.",
     severity: "high",
     source: "Source files: URLs in string literals",
+    limits: "Matches provider hostnames in string literals. A hostname in a comment or test also matches, and a hostname built at run time does not.",
     remediation: "Point the SDK's base URL at your AI Gateway (gateway.ai.cloudflare.com/v1/<account>/<gateway>/<provider>) or use the unified /ai/v1 endpoints.",
     answers: [{ framework: "generic-ai", itemId: "GAI-04" }],
     evaluate: (f) => {
@@ -26,6 +27,7 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     description: "A provider SDK with no gateway reference in the same file is almost certainly calling the provider directly.",
     severity: "medium",
     source: "Source files: import statements and gateway references",
+    limits: "Looks for a gateway reference in the same file as the SDK import. A gateway configured in another file is not recognized.",
     remediation: "Pass baseURL pointing at AI Gateway when constructing the client, or route through the AI binding with a gateway id.",
     answers: [{ framework: "generic-ai", itemId: "GAI-04" }],
     evaluate: (f) => {
@@ -44,6 +46,7 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     description: "env.AI.run without a gateway id has no logs, caching, rate limits or spend limits.",
     severity: "low",
     source: "Source files: env.AI.run calls and gateway options",
+    limits: "Looks for a gateway option in the same file as the env.AI.run call. A gateway configured elsewhere is not recognized.",
     remediation: "Add { gateway: { id: \"<gateway>\" } } as the options argument to env.AI.run, or use the default gateway.",
     answers: [{ framework: "generic-ai", itemId: "GAI-04" }],
     evaluate: (f) => {
@@ -62,6 +65,7 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     description: "Wrangler vars are committed in plaintext; provider keys belong in secrets or AI Gateway BYOK.",
     severity: "high",
     source: "wrangler.toml / wrangler.json(c): vars values",
+    limits: "Matches values shaped like provider keys in wrangler vars. Secrets in other files are not scanned.",
     remediation: "Remove the value from wrangler configuration, rotate the key, and store it with `wrangler secret put` or as a BYOK key on the gateway.",
     answers: [{ framework: "generic-ai", itemId: "GAI-12" }],
     evaluate: (f) => {
@@ -78,6 +82,7 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     description: "An MCP server without an Access or OAuth check will serve any client that finds the URL.",
     severity: "medium",
     source: "Source files: MCP server code and Access or OAuth checks",
+    limits: "Looks for any Access or OAuth check anywhere in the repository. It does not prove that check protects the MCP routes, and authentication applied outside the repository is not seen.",
     remediation: "Validate the Cf-Access-Jwt-Assertion header, or use the OAuth provider from the Agents SDK, before serving tools.",
     answers: [{ framework: "generic-ai", itemId: "GAI-14" }],
     evaluate: (f) => {
@@ -96,6 +101,7 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     description: "Workers Logs should be on for any Worker with an AI binding.",
     severity: "low",
     source: "wrangler.toml / wrangler.json(c): ai binding, observability.enabled",
+    limits: "Reads the wrangler configuration in the repository. The deployed Worker may differ.",
     remediation: "Add \"observability\": { \"enabled\": true } to the wrangler configuration.",
     answers: [{ framework: "generic-ai", itemId: "GAI-20" }],
     evaluate: (f) => {
@@ -114,6 +120,7 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     description: "Inventory of configuration variables that look like provider keys (names only).",
     severity: "info",
     source: "wrangler.toml / wrangler.json(c): vars names",
+    limits: "Lists variable names only. Values are never reported.",
     remediation: "",
     answers: [{ framework: "generic-ai", itemId: "GAI-21" }],
     evaluate: (f) => {

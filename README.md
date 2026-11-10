@@ -32,16 +32,23 @@ Repository /work/app (14 relevant files, 1 wrangler configs)  score 40/100  (2 p
 
 | Rule | Severity | Finds |
 |---|---|---|
-| AIG-001…007 | high→info | unauthenticated gateways, prompt logging without DLP, no rate or spend limits, BYOK fallback, guardrails off, provider/model inventory |
-| WRK-001 | medium | Workers holding provider API keys as secrets (names only; values are never read) |
+| AIG-001…007 | high→info | unauthenticated gateways, prompt logging without DLP, no rate or spend limits, BYOK fallback, guardrails not configured, provider/model inventory |
+| WRK-001 | medium | Worker secrets named like provider API keys (names only; values are never read). A name match suggests a direct provider call; it does not prove one |
 | WRK-002 | low | AI Workers without observability |
 | WRK-003 | medium | AI Workers reachable only on `workers.dev` |
-| WRK-004 | high | MCP-looking Workers reachable without a Cloudflare Access application |
+| WRK-004 | high | MCP-looking Workers with no Cloudflare Access application. Reported as *needs review*, not as a failure: OAuth inside the Worker cannot be read from the account |
 | ZONE-001 | high | endpoints Cloudflare labelled `cf-llm` with no rate limiting rule |
 | ZONE-002 | medium | zones with LLM endpoints and neither Bot Fight Mode nor custom rules |
 | ACC-001 | info | AI surface inventory |
 
-Rules live in [`packages/checks`](packages/checks) (`@cloudaisecurity/checks`, MIT) and are the same code that powers [cloudaisecurity.com](https://cloudaisecurity.com/checks). A rule that cannot be evaluated reports `unverifiable`, never `pass`.
+Rules live in [`packages/checks`](packages/checks) (`@cloudaisecurity/checks`, MIT) and are the same code that powers [cloudaisecurity.com](https://cloudaisecurity.com/checks). Every result carries the API call and fields it was read from (`source`) and a sentence on what it does not show (`limits`).
+
+Results are one of:
+
+- `pass` / `fail`: the rule was evaluated against values read from the provider.
+- `needs_review`: something was read but cannot settle the rule alone. A person has to answer.
+- `unverifiable` (shown as "not readable"): the values could not be read. Never treated as a pass.
+- `not_applicable`: nothing exists for the rule to apply to. An empty account does not pass.
 
 ## Install
 
@@ -61,7 +68,9 @@ export CLOUDFLARE_ACCOUNT_ID=…
 node packages/cli/bin/cloudai-scan.mjs account
 ```
 
-Token scope (all read): **Account** Workers Scripts, AI Gateway, Account Analytics, Access: Apps and Policies. **Zone (all zones)** Zone, Workers Routes, Zone WAF, API Gateway, Bot Management. Anything the token cannot read shows up as *unverifiable* with the endpoint named.
+Token scope (all read): **Account** Workers Scripts, AI Gateway, Account Analytics, Access: Apps and Policies. **Zone (all zones)** Zone, Workers Routes, Zone WAF, API Gateway, Bot Management. Anything the token cannot read shows up as *not readable* with the endpoint named.
+
+The connectors can only send `GET` requests to `api.openai.com/v1/organization`, `api.anthropic.com/v1/organizations` and `api.cloudflare.com/client/v4`, plus one read-only GraphQL analytics query. Any other request throws before it leaves (`assertReadOnly` in `packages/connectors/src/types.ts`), and credentials are redacted from error text.
 
 ## CI
 

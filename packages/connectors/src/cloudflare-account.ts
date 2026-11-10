@@ -13,9 +13,11 @@ type CfOne<T> = { success: boolean; result: T };
 export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
   provider: "cloudflare-account",
   credentialGuide: {
-    label: "Cloudflare API token (read-only inventory)",
+    label: "Cloudflare API token, read-only",
     docsUrl: "https://dash.cloudflare.com/profile/api-tokens",
-    scope: "Account: Workers Scripts Read, Access: Apps and Policies Read. Zone (all zones): Zone Read, Workers Routes Read, Zone WAF Read, API Gateway Read, Zone Settings Read.",
+    readOnlyByProvider: true,
+    scope: "Account: Workers Scripts Read, Access: Apps and Policies Read. Zone (all zones): Zone Read, Workers Routes Read, Zone WAF Read, API Gateway Read, Bot Management Read. Cloudflare enforces these read-only permissions.",
+    use: "We send only GET requests to api.cloudflare.com. Secret names are read; secret values cannot be read through this API.",
   },
 
   async verify(creds: Credentials): Promise<VerifyResult> {
@@ -46,54 +48,70 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
     };
 
     // Workers
-    const scripts = (await attempt("GET /workers/scripts", () => getJson<CfList<any>>(`${API}/accounts/${acct}/workers/scripts`, headers)))?.result ?? [];
+    const scripts = (await attempt("GET /workers/scripts", () => getJson<CfList<any>>(`${API}/accounts/${acct}/workers/scripts`, headers)))?.result;
     const domains = (await attempt("GET /workers/domains", () => getJson<CfList<any>>(`${API}/accounts/${acct}/workers/domains`, headers)))?.result ?? [];
-    const workers: WorkerFact[] = [];
-    for (const s of scripts.slice(0, 200)) {
-      const settings = await attempt(`GET /workers/scripts/${s.id}/settings`, () => getJson<CfOne<any>>(`${API}/accounts/${acct}/workers/scripts/${s.id}/settings`, headers));
-      const subdomain = await attempt(`GET /workers/scripts/${s.id}/subdomain`, () => getJson<CfOne<{ enabled: boolean }>>(`${API}/accounts/${acct}/workers/scripts/${s.id}/subdomain`, headers));
-      const bindings: { type: string; name: string }[] = (settings?.result?.bindings ?? []).map((b: any) => ({ type: String(b.type), name: String(b.name ?? b.binding ?? "") }));
-      workers.push({
-        name: s.id,
-        modifiedAt: s.modified_on,
-        bindings: bindings.filter((b) => b.type !== "secret_text"),
-        secretNames: bindings.filter((b) => b.type === "secret_text").map((b) => b.name),
-        routes: [],
-        customDomains: domains.filter((d: any) => d.service === s.id).map((d: any) => String(d.hostname)),
-        workersDevEnabled: subdomain?.result?.enabled,
-        observabilityEnabled: settings?.result?.observability === undefined ? undefined : Boolean(settings.result.observability?.enabled),
-      });
+    let workers: WorkerFact[] | undefined;
+    if (scripts) {
+      workers = [];
+      for (const s of scripts.slice(0, 200)) {
+        const settings = await attempt(`GET /workers/scripts/${s.id}/settings`, () => getJson<CfOne<any>>(`${API}/accounts/${acct}/workers/scripts/${s.id}/settings`, headers));
+        const subdomain = await attempt(`GET /workers/scripts/${s.id}/subdomain`, () => getJson<CfOne<{ enabled: boolean }>>(`${API}/accounts/${acct}/workers/scripts/${s.id}/subdomain`, headers));
+        const bindings: { type: string; name: string }[] = (settings?.result?.bindings ?? []).map((b: any) => ({ type: String(b.type), name: String(b.name ?? b.binding ?? "") }));
+        workers.push({
+          name: s.id,
+          modifiedAt: s.modified_on,
+          bindings: bindings.filter((b) => b.type !== "secret_text"),
+          secretNames: bindings.filter((b) => b.type === "secret_text").map((b) => b.name),
+          routes: [],
+          customDomains: domains.filter((d: any) => d.service === s.id).map((d: any) => String(d.hostname)),
+          workersDevEnabled: subdomain?.result?.enabled,
+          observabilityEnabled: settings === undefined ? undefined : settings.result?.observability?.enabled === true,
+        });
+      }
     }
 
     // Zones
-    const zonesRaw = (await attempt("GET /zones", () => getJson<CfList<any>>(`${API}/zones?per_page=50&account.id=${acct}`, headers)))?.result ?? [];
-    const zones: ZoneFact[] = [];
-    for (const z of zonesRaw) {
-      const routes = (await attempt(`GET /zones/${z.id}/workers/routes`, () => getJson<CfList<any>>(`${API}/zones/${z.id}/workers/routes`, headers)))?.result ?? [];
-      for (const r of routes) {
-        const w = workers.find((x) => x.name === r.script);
-        if (w) w.routes.push(String(r.pattern));
+    const zonesRaw = (await attempt("GET /zones", () => getJson<CfList<any>>(`${API}/zones?per_page=50&account.id=${acct}`, headers)))?.result;
+    let zones: ZoneFact[] | undefined;
+    const hasLlmLabel = (o: any): boolean => {
+      const labels: unknown[] = [...(Array.isArray(o.labels) ? o.labels : []), ...(Array.isArray(o.features?.label?.labels) ? o.features.label.labels : [])];
+      return labels.some((l) => l === "cf-llm" || (l && typeof l === "object" && (l as { name?: string }).name === "cf-llm"));
+    };
+    if (zonesRaw) {
+      zones = [];
+      for (const z of zonesRaw) {
+        const routes = (await attempt(`GET /zones/${z.id}/workers/routes`, () => getJson<CfList<any>>(`${API}/zones/${z.id}/workers/routes`, headers)))?.result ?? [];
+        for (const r of routes) {
+          const w = workers?.find((x) => x.name === r.script);
+          if (w) w.routes.push(String(r.pattern));
+        }
+        const ops = await attempt(`GET /zones/${z.id}/api_gateway/operations`, () => getJson<CfList<any>>(`${API}/zones/${z.id}/api_gateway/operations?per_page=200&feature=label`, headers));
+        // Only operations Cloudflare itself labelled cf-llm count. No label, no claim.
+        const llmOperations = (ops?.result ?? []).filter(hasLlmLabel).map((o: any) => ({ method: String(o.method), host: String(o.host), endpoint: String(o.endpoint) }));
+        // A 404 on a ruleset entrypoint means "no rules yet", which is readable and empty.
+        const ruleset = async (phase: string): Promise<string[] | undefined> => {
+          const before = errors.length;
+          const res = await attempt(`GET /zones/${z.id}/rulesets/phases/${phase}/entrypoint`, () => getJson<CfOne<{ rules?: { expression: string; enabled?: boolean }[] }>>(`${API}/zones/${z.id}/rulesets/phases/${phase}/entrypoint`, headers));
+          if (res) return (res.result.rules ?? []).filter((r) => r.enabled !== false).map((r) => r.expression);
+          if (errors[before]?.status === 404) {
+            errors.splice(before, 1);
+            return [];
+          }
+          return undefined;
+        };
+        const rlExpressions = await ruleset("http_ratelimit");
+        const crExpressions = await ruleset("http_request_firewall_custom");
+        const bfm = await attempt(`GET /zones/${z.id}/bot_management`, () => getJson<CfOne<{ fight_mode?: boolean; sbfm_definitely_automated?: string }>>(`${API}/zones/${z.id}/bot_management`, headers));
+        zones.push({
+          id: z.id,
+          name: z.name,
+          plan: z.plan?.name,
+          llmOperations,
+          rateLimitExpressions: rlExpressions,
+          customRuleExpressions: crExpressions,
+          botFightMode: bfm ? Boolean(bfm.result.fight_mode || (bfm.result.sbfm_definitely_automated && bfm.result.sbfm_definitely_automated !== "allow")) : undefined,
+        });
       }
-      const ops = await attempt(`GET /zones/${z.id}/api_gateway/operations?label=cf-llm`, () => getJson<CfList<any>>(`${API}/zones/${z.id}/api_gateway/operations?per_page=200&feature=label&label=cf-llm`, headers));
-      const llmOperations = (ops?.result ?? [])
-        .filter((o: any) => o.features?.label?.labels?.includes?.("cf-llm") || (Array.isArray(o.labels) && o.labels.includes("cf-llm")) || ops?.result?.length)
-        .map((o: any) => ({ method: String(o.method), host: String(o.host), endpoint: String(o.endpoint) }));
-      const rl = await attempt(`GET /zones/${z.id}/rulesets/phases/http_ratelimit/entrypoint`, () => getJson<CfOne<{ rules?: { expression: string; enabled: boolean }[] }>>(`${API}/zones/${z.id}/rulesets/phases/http_ratelimit/entrypoint`, headers));
-      const cr = await attempt(`GET /zones/${z.id}/rulesets/phases/http_request_firewall_custom/entrypoint`, () => getJson<CfOne<{ rules?: { expression: string; enabled: boolean }[] }>>(`${API}/zones/${z.id}/rulesets/phases/http_request_firewall_custom/entrypoint`, headers));
-      const bfm = await attempt(`GET /zones/${z.id}/bot_management`, () => getJson<CfOne<{ fight_mode?: boolean; sbfm_definitely_automated?: string }>>(`${API}/zones/${z.id}/bot_management`, headers));
-      // A 404 on a ruleset entrypoint means "no rules yet", which is readable and empty.
-      const lastErr = () => errors.at(-1);
-      const rlExpressions = rl ? (rl.result.rules ?? []).filter((r) => r.enabled !== false).map((r) => r.expression) : lastErr()?.status === 404 && lastErr()?.endpoint.includes("http_ratelimit") ? [] : undefined;
-      const crExpressions = cr ? (cr.result.rules ?? []).filter((r) => r.enabled !== false).map((r) => r.expression) : lastErr()?.status === 404 && lastErr()?.endpoint.includes("firewall_custom") ? [] : undefined;
-      zones.push({
-        id: z.id,
-        name: z.name,
-        plan: z.plan?.name,
-        llmOperations,
-        rateLimitExpressions: rlExpressions,
-        customRuleExpressions: crExpressions,
-        botFightMode: bfm ? Boolean(bfm.result.fight_mode || (bfm.result.sbfm_definitely_automated && bfm.result.sbfm_definitely_automated !== "allow")) : undefined,
-      });
     }
 
     // Access applications

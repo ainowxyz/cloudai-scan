@@ -64,7 +64,7 @@ export async function main(argv: string[]): Promise<number> {
     const gw = await cloudflareAiGatewayConnector.verify(creds);
     if (gw.ok) {
       const c = await cloudflareAiGatewayConnector.collect(creds);
-      sections.push({ title: `AI Gateway (${c.facts.gateways.length} gateways)`, results: runChecks("cloudflare-ai-gateway", c.facts), errors: c.errors });
+      sections.push({ title: `AI Gateway (${c.facts.gateways?.length ?? "unreadable"} gateways)`, results: runChecks("cloudflare-ai-gateway", c.facts), errors: c.errors });
     } else {
       sections.push({ title: "AI Gateway", results: [], errors: [{ endpoint: "verify", status: 0, message: gw.error ?? "not readable" }] });
     }
@@ -72,7 +72,7 @@ export async function main(argv: string[]): Promise<number> {
       const acc = await cloudflareAccountConnector.verify(creds);
       if (acc.ok) {
         const c = await cloudflareAccountConnector.collect(creds);
-        sections.push({ title: `Account inventory (${c.facts.workers.length} Workers, ${c.facts.zones.length} zones)`, results: runChecks("cloudflare-account", c.facts), errors: c.errors });
+        sections.push({ title: `Account inventory (${c.facts.workers?.length ?? "unreadable"} Workers, ${c.facts.zones?.length ?? "unreadable"} zones)`, results: runChecks("cloudflare-account", c.facts), errors: c.errors });
       } else {
         sections.push({ title: "Account inventory", results: [], errors: [{ endpoint: "verify", status: 0, message: acc.error ?? "not readable" }] });
       }

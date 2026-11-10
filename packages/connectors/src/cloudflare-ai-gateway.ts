@@ -8,9 +8,11 @@ type CfList<T> = { success: boolean; result: T[]; result_info?: { total_count?: 
 export const cloudflareAiGatewayConnector: Connector<"cloudflare-ai-gateway"> = {
   provider: "cloudflare-ai-gateway",
   credentialGuide: {
-    label: "Cloudflare API token",
+    label: "Cloudflare API token, read-only",
     docsUrl: "https://dash.cloudflare.com/profile/api-tokens",
-    scope: "Account: AI Gateway Read, Account Analytics Read. Nothing else.",
+    readOnlyByProvider: true,
+    scope: "Account: AI Gateway Read, Account Analytics Read. Nothing else. Cloudflare enforces these read-only permissions.",
+    use: "We send GET requests to api.cloudflare.com, plus one read-only analytics query. The same token can also carry the Cloudflare account scopes.",
   },
 
   async verify(creds: Credentials): Promise<VerifyResult> {
@@ -42,22 +44,27 @@ export const cloudflareAiGatewayConnector: Connector<"cloudflare-ai-gateway"> = 
       }
     };
 
-    const raw = (await attempt("GET /ai-gateway/gateways", () => getJson<CfList<any>>(`${API}/accounts/${acct}/ai-gateway/gateways?per_page=50`, headers)))?.result ?? [];
-    const gateways: AIGatewayFact[] = [];
-    for (const g of raw) {
-      const byok = await attempt(`GET /ai-gateway/gateways/${g.id}/byok`, () => getJson<CfList<unknown>>(`${API}/accounts/${acct}/ai-gateway/gateways/${g.id}/byok?per_page=1`, headers));
-      gateways.push({
-        id: g.id,
-        authentication: Boolean(g.authentication),
-        collectLogs: Boolean(g.collect_logs),
-        dlpEnabled: g.dlp === undefined ? undefined : Boolean(g.dlp?.enabled),
-        rateLimitingLimit: Number(g.rate_limiting_limit ?? 0),
-        rateLimitingInterval: Number(g.rate_limiting_interval ?? 0),
-        byokOnly: g.byok_only === undefined ? undefined : Boolean(g.byok_only),
-        hasByokKeys: byok === undefined ? undefined : (byok.result_info?.total_count ?? byok.result.length) > 0,
-        guardrailsEnabled: g.guardrails === undefined && g.firewall === undefined ? undefined : Boolean(g.guardrails?.enabled ?? g.firewall?.enabled),
-        spendLimitSet: g.spend_limits === undefined ? undefined : Array.isArray(g.spend_limits) ? g.spend_limits.length > 0 : Boolean(g.spend_limits),
-      });
+    const list = await attempt("GET /ai-gateway/gateways", () => getJson<CfList<any>>(`${API}/accounts/${acct}/ai-gateway/gateways?per_page=50`, headers));
+    let gateways: AIGatewayFact[] | undefined;
+    if (list) {
+      gateways = [];
+      for (const g of list.result ?? []) {
+        const keys = await attempt(`GET /ai-gateway/gateways/${g.id}/provider_configs`, () => getJson<CfList<unknown>>(`${API}/accounts/${acct}/ai-gateway/gateways/${g.id}/provider_configs?per_page=1`, headers));
+        const count = (o: unknown) => (o && typeof o === "object" ? Object.keys(o).length : 0);
+        // Optional settings that are absent from the gateway object are not configured.
+        gateways.push({
+          id: String(g.id),
+          authentication: g.authentication === true,
+          collectLogs: g.collect_logs === true,
+          dlpEnabled: g.dlp?.enabled === true,
+          rateLimitingLimit: Number(g.rate_limiting_limit ?? 0),
+          rateLimitingInterval: Number(g.rate_limiting_interval ?? 0),
+          byokOnly: g.byok_only === true,
+          hasByokKeys: keys === undefined ? undefined : (keys.result_info?.total_count ?? keys.result?.length ?? 0) > 0,
+          guardrailsEnabled: count(g.guardrails?.prompt) + count(g.guardrails?.response) > 0,
+          spendLimitSet: g.spend_limits?.enabled === true && Array.isArray(g.spend_limits?.rules) && g.spend_limits.rules.some((r: any) => r?.enabled !== false),
+        });
+      }
     }
 
     const start = new Date(now.getTime() - 30 * 86_400_000).toISOString();

@@ -26,9 +26,27 @@ describe("cloudflare account checks", () => {
   const by = (id: string) => r.find((x) => x.id === id)!;
 
   it("flags provider keys on Workers", () => expect(by("WRK-001").status).toBe("fail"));
-  it("flags MCP without Access", () => {
-    expect(by("WRK-004").status).toBe("fail");
+  it("reports an MCP Worker without Access as needing review, not as unauthenticated", () => {
+    expect(by("WRK-004").status).toBe("needs_review");
     expect(by("WRK-004").evidence[0]).toContain("docs-mcp");
+    expect(by("WRK-004").summary).toMatch(/cannot be read/);
+    expect(by("WRK-004").summary).not.toMatch(/unauthenticated|reachable without/i);
+    expect(by("WRK-004").limits).toMatch(/OAuth/);
+  });
+  it("passes WRK-004 when Access covers every hostname", () => {
+    const covered = runChecks("cloudflare-account", { ...facts, workers: [{ ...facts.workers![1]!, workersDevEnabled: false }], accessHostnames: ["mcp.example.com"] });
+    expect(covered.find((x) => x.id === "WRK-004")?.status).toBe("pass");
+  });
+  it("a secret name is reported as a name match, not as proof of a bypass", () => {
+    expect(by("WRK-001").summary).toMatch(/named like/);
+    expect(by("WRK-001").limits).toMatch(/does not prove/);
+  });
+  it("never passes when Workers or zones could not be read", () => {
+    for (const r of runChecks("cloudflare-account", { collectedAt: NOW })) expect(r.status, r.id).toBe("unverifiable");
+  });
+  it("an account with nothing relevant is not applicable", () => {
+    const empty = runChecks("cloudflare-account", { workers: [], zones: [], accessHostnames: [], collectedAt: NOW });
+    for (const id of ["WRK-001", "WRK-002", "WRK-003", "WRK-004", "ZONE-001", "ZONE-002"]) expect(empty.find((x) => x.id === id)?.status, id).toBe("not_applicable");
   });
   it("flags uncovered LLM endpoints and bare zones", () => {
     expect(by("ZONE-001").status).toBe("fail");

@@ -2,7 +2,14 @@ export type Provider = "openai" | "anthropic" | "cloudflare-ai-gateway" | "cloud
 
 export type Severity = "high" | "medium" | "low" | "info";
 
-export type CheckStatus = "pass" | "fail" | "not_applicable" | "unverifiable";
+/**
+ * pass / fail: the rule was evaluated against values read from the provider.
+ * needs_review: something was read, but it cannot settle the rule on its own (for example, no Cloudflare Access
+ *   application was found, which does not prove a server has no authentication). A person has to answer.
+ * unverifiable: the values could not be read. Shown as "not readable". Never treated as a pass.
+ * not_applicable: nothing exists for the rule to apply to.
+ */
+export type CheckStatus = "pass" | "fail" | "needs_review" | "not_applicable" | "unverifiable";
 
 /** Where a fact came from. Every customer-visible fact carries this. */
 export interface Provenance {
@@ -24,11 +31,20 @@ export interface CheckResult {
   status: CheckStatus;
   severity: Severity;
   title: string;
-  /** The provider API call(s) and field(s) read. */
+  /** The provider API call(s) and field path(s) read, in the provider's own names. */
   source: string;
-  /** One sentence a buyer can read. */
+  /** Provider documentation for that call. */
+  docsUrl?: string;
+  /** What this result does not show. Printed next to every result so it is not over-read. */
+  limits: string;
+  /** One sentence a buyer can read: the bounded observation, not a wider conclusion. */
   summary: string;
-  /** Short evidence lines (never secrets, never prompt content). */
+  /**
+   * Values read from the provider that are safe to publish: counts, model names, limit values, setting names.
+   * Never people, email addresses, key or project names, amounts of money, or secrets.
+   */
+  observed: string[];
+  /** Internal detail for the account owner (project, key and Worker names). Never published. Never secrets or prompt content. */
   evidence: string[];
   remediation?: string;
   answers: QuestionnaireRef[];
@@ -40,11 +56,15 @@ export interface CheckDefinition<F> {
   title: string;
   description: string;
   severity: Severity;
-  /** The provider API call(s) and field(s) this check reads, shown next to every result. */
+  /** The provider API call(s) and field path(s) this check reads, in the provider's own names. Shown next to every result. */
   source: string;
+  /** Provider documentation for that call. */
+  docsUrl?: string;
+  /** What a result of this check does not show. */
+  limits: string;
   remediation: string;
   answers: QuestionnaireRef[];
-  evaluate: (facts: F) => Pick<CheckResult, "status" | "summary" | "evidence">;
+  evaluate: (facts: F) => Pick<CheckResult, "status" | "summary" | "evidence"> & { observed?: string[] };
 }
 
 /* ---------- Provider fact shapes (collected read-only by connectors) ---------- */
@@ -57,41 +77,54 @@ export interface OpenAIApiKeyFact {
   ownerType: "user" | "service_account" | "unknown";
 }
 
+/** In every fact shape, `undefined` means "the endpoint could not be read", which is different from an empty list. */
 export interface OpenAIProjectFact {
   id: string;
   name: string;
   status: "active" | "archived";
   createdAt: string;
-  apiKeys: OpenAIApiKeyFact[];
-  serviceAccountCount: number;
-  /** undefined = endpoint not reachable with the given key, so unverifiable. */
-  hasRateLimitOverrides?: boolean;
+  apiKeys?: OpenAIApiKeyFact[];
+  serviceAccountCount?: number;
+  /** GET …/rate_limits: one entry per model. */
+  rateLimits?: { model: string; maxRequestsPer1Minute?: number; maxTokensPer1Minute?: number }[];
+  /** GET …/spend_alerts: number of alerts. Alerts notify; they do not stop usage. */
   spendAlertCount?: number;
-  dataRetention?: "organization_default" | "explicit";
-  modelPermissionsMode?: "allow_list" | "deny_list" | "none";
+  /** GET …/spend_limit: threshold_amount in cents. 0 means no hard limit. */
+  spendLimitCents?: number;
+  /** GET …/data_retention: type, as OpenAI names it (organization_default, none, zero_data_retention, …). */
+  dataRetention?: string;
+  /** GET …/model_permissions: mode and number of model ids. */
+  modelPermissions?: { mode: "allow_list" | "deny_list" | string; modelCount: number };
 }
 
 export interface OpenAIFacts {
-  auditLogsEnabled?: boolean;
-  orgSpendLimitSet?: boolean;
-  projects: OpenAIProjectFact[];
-  users: { id: string; email: string; role: "owner" | "reader" | string; addedAt: string }[];
-  invites: { email: string; status: string; invitedAt: string }[];
+  /** Number of events GET /audit_logs?limit=1 returned (0 or 1). */
+  auditLogEvents?: number;
+  /** effective_at of the most recent audit event, if one was returned. */
+  auditLogLatestAt?: string | null;
+  /** GET /organization/spend_limit: threshold_amount in cents. 0 means no hard limit. */
+  orgSpendLimitCents?: number;
+  projects?: OpenAIProjectFact[];
+  users?: { id: string; email: string; role: "owner" | "member" | string; addedAt: string }[];
+  invites?: { email: string; status: string; invitedAt: string }[];
   modelsUsed30d?: string[];
   collectedAt: string;
 }
 
 export interface AnthropicFacts {
-  users: { id: string; email: string; role: string; addedAt?: string }[];
-  invites: { email: string; status: string; invitedAt?: string }[];
-  workspaces: { id: string; name: string; archivedAt: string | null; isDefault?: boolean }[];
-  apiKeys: {
+  users?: { id: string; email: string; role: string; addedAt?: string }[];
+  invites?: { email: string; status: string; invitedAt?: string }[];
+  workspaces?: { id: string; name: string; archivedAt: string | null; isDefault?: boolean }[];
+  apiKeys?: {
     id: string;
     name: string;
-    status: "active" | "inactive" | "archived" | string;
+    status: "active" | "inactive" | "archived" | "expired" | string;
     createdAt: string;
+    /** scope.workspace_id; null for an organization-scoped key or the default workspace. */
     workspaceId: string | null;
   }[];
+  /** GET /v1/organizations/spend_limits. For Console organizations this endpoint is an early-access preview. */
+  spendLimits?: { scopeType: string; hasAmount: boolean; enabled: boolean; period: string }[];
   modelsUsed30d?: string[];
   collectedAt: string;
 }
@@ -100,21 +133,22 @@ export interface AIGatewayFact {
   id: string;
   authentication: boolean;
   collectLogs: boolean;
-  dlpEnabled?: boolean;
+  dlpEnabled: boolean;
   rateLimitingLimit: number;
   rateLimitingInterval: number;
-  byokOnly?: boolean;
+  byokOnly: boolean;
+  /** undefined = stored provider keys could not be listed. */
   hasByokKeys?: boolean;
-  guardrailsEnabled?: boolean;
-  spendLimitSet?: boolean;
+  guardrailsEnabled: boolean;
+  /** spend_limits.enabled with at least one enabled rule. */
+  spendLimitSet: boolean;
 }
 
 export interface AIGatewayFacts {
-  gateways: AIGatewayFact[];
+  gateways?: AIGatewayFact[];
   usage30d?: { gateway: string; provider: string; model: string; requests: number }[];
   collectedAt: string;
 }
-
 /* ---------- Cloudflare account inventory (Workers, zones, Access) ---------- */
 
 export interface WorkerFact {
@@ -144,8 +178,8 @@ export interface ZoneFact {
 }
 
 export interface CloudflareAccountFacts {
-  workers: WorkerFact[];
-  zones: ZoneFact[];
+  workers?: WorkerFact[];
+  zones?: ZoneFact[];
   /** Hostnames protected by Cloudflare Access applications. undefined = not readable. */
   accessHostnames?: string[];
   collectedAt: string;

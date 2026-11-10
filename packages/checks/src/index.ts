@@ -8,9 +8,19 @@ import type { CheckDefinition, CheckResult, FactsFor, Provider } from "./types.j
 export * from "./types.js";
 export * from "./questionnaires.js";
 export * from "./patterns.js";
+export * from "./answers.js";
 export { openaiChecks, anthropicChecks, aiGatewayChecks, cloudflareAccountChecks, repoChecks };
 
-export const CHECKS_VERSION = "2026.11.2";
+export const CHECKS_VERSION = "2026.11.3";
+
+/** Display names for providers, used wherever a result is shown to a person. */
+export const PROVIDER_LABEL: Record<Provider, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  "cloudflare-ai-gateway": "Cloudflare AI Gateway",
+  "cloudflare-account": "Cloudflare account",
+  repo: "Repository",
+};
 
 const registry: { [P in Provider]: CheckDefinition<FactsFor<P>>[] } = {
   openai: openaiChecks,
@@ -39,8 +49,11 @@ export function runChecks<P extends Provider>(provider: P, facts: FactsFor<P>): 
         severity: def.severity,
         title: def.title,
         source: def.source,
+        docsUrl: def.docsUrl,
+        limits: def.limits,
         status: r.status,
         summary: r.summary,
+        observed: r.observed ?? [],
         evidence: r.evidence,
         remediation: r.status === "fail" ? def.remediation : undefined,
         answers: def.answers,
@@ -52,8 +65,11 @@ export function runChecks<P extends Provider>(provider: P, facts: FactsFor<P>): 
         severity: def.severity,
         title: def.title,
         source: def.source,
+        docsUrl: def.docsUrl,
+        limits: def.limits,
         status: "unverifiable",
         summary: `Check could not run: ${err instanceof Error ? err.message : String(err)}`,
+        observed: [],
         evidence: [],
         answers: def.answers,
       };
@@ -68,15 +84,15 @@ export interface Score {
 
 const WEIGHT = { high: 3, medium: 2, low: 1, info: 0 } as const;
 
-/** Share of weighted, verifiable checks that pass. Info and not_applicable are excluded. */
+/** Share of weighted checks with a pass or fail result that pass. Info, not_applicable, unverifiable and needs_review are excluded. */
 export function scoreResults(results: CheckResult[]): Score {
-  const counts = { pass: 0, fail: 0, not_applicable: 0, unverifiable: 0 } as Record<CheckResult["status"], number>;
+  const counts = { pass: 0, fail: 0, needs_review: 0, not_applicable: 0, unverifiable: 0 } as Record<CheckResult["status"], number>;
   let earned = 0;
   let possible = 0;
   for (const r of results) {
     counts[r.status]++;
     const w = WEIGHT[r.severity];
-    if (w === 0 || r.status === "not_applicable" || r.status === "unverifiable") continue;
+    if (w === 0 || r.status === "not_applicable" || r.status === "unverifiable" || r.status === "needs_review") continue;
     possible += w;
     if (r.status === "pass") earned += w;
   }
