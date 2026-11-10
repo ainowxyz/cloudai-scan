@@ -44,17 +44,25 @@ export const anthropicConnector: Connector<"anthropic"> = {
     label: "Anthropic Admin API key",
     docsUrl: "https://platform.claude.com/settings/admin-keys",
     readOnlyByProvider: false,
-    scope: "Anthropic admin keys (sk-ant-admin…) cover the whole organization and cannot be limited to read-only. This key could also change members, workspaces and API keys.",
+    scope: "Anthropic admin keys (sk-ant-admin…) cover the whole organization and cannot be limited to read-only. This key could also change members, workspaces and API keys. Admin keys exist only for organizations with members; an individual organization has no Admin API and cannot be connected.",
     use: "We send only GET requests to api.anthropic.com/v1/organizations. Delete the key on the same page at any time.",
   },
 
   async verify(creds: Credentials): Promise<VerifyResult> {
+    // /me accepts keys that can read nothing else, so the test is an endpoint the rules actually need.
     try {
-      await getJson(`${BASE}/me`, headersFor(creds.secret));
+      await getJson(`${BASE}/users?limit=1`, headersFor(creds.secret));
       return { ok: true, permissions: ["organization:read", "workspaces:read", "api_keys:read"] };
     } catch (e) {
       const status = e instanceof ProviderHttpError ? e.status : 0;
-      return { ok: false, permissions: [], error: status === 401 || status === 403 ? "Key rejected. Use an Admin API key (sk-ant-admin…) from an organization admin." : `Anthropic returned ${status || "a network error"}.` };
+      if (status === 401) return { ok: false, permissions: [], error: "Key rejected. Use an Admin API key (sk-ant-admin…) from an organization admin." };
+      if (status === 403 || status === 404)
+        return {
+          ok: false,
+          permissions: [],
+          error: "This key cannot read organization settings, so nothing could be checked with it. Anthropic's Admin API needs an Admin API key (sk-ant-admin…) created by an organization admin. Individual organizations do not have an Admin API.",
+        };
+      return { ok: false, permissions: [], error: `Anthropic returned ${status || "a network error"}.` };
     }
   },
 

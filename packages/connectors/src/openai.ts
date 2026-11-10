@@ -53,6 +53,25 @@ export const openaiConnector: Connector<"openai"> = {
       }
     };
 
+    /**
+     * OpenAI answers 404 with "No … is configured" / "No … found" when a setting simply does not exist.
+     * That is a readable answer ("none"), not a failed read, so it is returned as `none` and not recorded as an error.
+     */
+    const NONE = Symbol("none");
+    const attemptOrNone = async <T>(endpoint: string, absent: RegExp, fn: () => Promise<T>): Promise<T | typeof NONE | undefined> => {
+      endpoints.push(endpoint);
+      try {
+        return await fn();
+      } catch (e) {
+        if (e instanceof ProviderHttpError && e.status === 404 && absent.test(e.message)) return NONE;
+        errors.push({ endpoint, status: e instanceof ProviderHttpError ? e.status : 0, message: e instanceof Error ? e.message : String(e) });
+        return undefined;
+      }
+    };
+    const NO_SPEND_LIMIT = /no (project|organization)?\s*spend limit/i;
+    const NO_MODEL_PERMISSIONS = /no model permissions/i;
+    const NO_SPEND_ALERTS = /no (project|organization)?\s*spend alerts?/i;
+
     const projectsRaw = await attempt("GET /projects", () => listAll<any>("/projects?include_archived=true", headers));
     let projects: OpenAIProjectFact[] | undefined;
     if (projectsRaw) {
@@ -70,9 +89,9 @@ export const openaiConnector: Connector<"openai"> = {
         const sas = await attempt(`GET ${at}/service_accounts`, () => listAll<any>(`${at}/service_accounts`, headers));
         const rl = await attempt(`GET ${at}/rate_limits`, () => listAll<any>(`${at}/rate_limits`, headers));
         const alerts = await attempt(`GET ${at}/spend_alerts`, () => listAll<any>(`${at}/spend_alerts`, headers));
-        const limit = await attempt(`GET ${at}/spend_limit`, () => getJson<{ threshold_amount?: number }>(`${BASE}${at}/spend_limit`, headers));
+        const limit = await attemptOrNone(`GET ${at}/spend_limit`, NO_SPEND_LIMIT, () => getJson<{ threshold_amount?: number }>(`${BASE}${at}/spend_limit`, headers));
         const retention = await attempt(`GET ${at}/data_retention`, () => getJson<{ type?: string }>(`${BASE}${at}/data_retention`, headers));
-        const perms = await attempt(`GET ${at}/model_permissions`, () => getJson<{ mode?: string; model_ids?: unknown[] }>(`${BASE}${at}/model_permissions`, headers));
+        const perms = await attemptOrNone(`GET ${at}/model_permissions`, NO_MODEL_PERMISSIONS, () => getJson<{ mode?: string; model_ids?: unknown[] }>(`${BASE}${at}/model_permissions`, headers));
         projects.push({
           ...base,
           apiKeys: keys?.map((k: any) => ({
@@ -89,9 +108,9 @@ export const openaiConnector: Connector<"openai"> = {
             maxTokensPer1Minute: typeof r.max_tokens_per_1_minute === "number" ? r.max_tokens_per_1_minute : undefined,
           })),
           spendAlertCount: alerts?.length,
-          spendLimitCents: typeof limit?.threshold_amount === "number" ? limit.threshold_amount : undefined,
+          spendLimitCents: limit === NONE ? 0 : typeof limit?.threshold_amount === "number" ? limit.threshold_amount : undefined,
           dataRetention: typeof retention?.type === "string" ? retention.type : undefined,
-          modelPermissions: typeof perms?.mode === "string" ? { mode: perms.mode, modelCount: Array.isArray(perms.model_ids) ? perms.model_ids.length : 0 } : undefined,
+          modelPermissions: perms === NONE ? { mode: "none", modelCount: 0 } : typeof perms?.mode === "string" ? { mode: perms.mode, modelCount: Array.isArray(perms.model_ids) ? perms.model_ids.length : 0 } : undefined,
         });
       }
     }
@@ -110,7 +129,9 @@ export const openaiConnector: Connector<"openai"> = {
 
     // One event is enough to know the log is recording. An empty list is reported as such, not as "disabled".
     const audit = await attempt("GET /audit_logs", () => getJson<Page<{ effective_at?: number }>>(`${BASE}/audit_logs?limit=1`, headers));
-    const orgLimit = await attempt("GET /spend_limit", () => getJson<{ threshold_amount?: number }>(`${BASE}/spend_limit`, headers));
+    const orgLimit = await attemptOrNone("GET /spend_limit", NO_SPEND_LIMIT, () => getJson<{ threshold_amount?: number }>(`${BASE}/spend_limit`, headers));
+    // Organization-level alerts cover every project. The dashboard offers them; the endpoint mirrors the project one.
+    const orgAlerts = await attemptOrNone("GET /spend_alerts", NO_SPEND_ALERTS, () => listAll<any>("/spend_alerts", headers));
 
     const usageOf = (kind: "completions" | "embeddings") =>
       attempt(`GET /usage/${kind}`, () =>
@@ -125,7 +146,8 @@ export const openaiConnector: Connector<"openai"> = {
       facts: {
         auditLogEvents: audit ? (audit.data ?? []).length : undefined,
         auditLogLatestAt: audit ? isoFromUnix(audit.data?.[0]?.effective_at) : undefined,
-        orgSpendLimitCents: typeof orgLimit?.threshold_amount === "number" ? orgLimit.threshold_amount : undefined,
+        orgSpendLimitCents: orgLimit === NONE ? 0 : typeof orgLimit?.threshold_amount === "number" ? orgLimit.threshold_amount : undefined,
+        orgSpendAlertCount: orgAlerts === NONE ? 0 : orgAlerts?.length,
         projects,
         users,
         invites,

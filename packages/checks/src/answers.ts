@@ -27,6 +27,18 @@ export const ANSWER_STATE_LABEL: Record<AnswerState, string> = {
   not_applicable: "Not applicable",
 };
 
+/**
+ * The same states in the words a buyer reads. "Your statement" on a page sent to a buyer reads as the buyer's own,
+ * so anything shown outside the owner's screens uses these.
+ */
+export const ANSWER_STATE_LABEL_READER: Record<AnswerState, string> = {
+  complete: "Statement supplied",
+  partial: "Partial: no statement supplied",
+  needs_statement: "No statement supplied",
+  not_readable: "Not readable, no statement",
+  not_applicable: "Not applicable",
+};
+
 export interface AnswerResultInput {
   checkId: string;
   provider: Provider | string;
@@ -121,7 +133,7 @@ export function buildAnswers(input: AnswerInput): BuiltAnswers {
         status: "pass",
         text: `Connected for checking: ${names.join(", ")}.`,
         source: "Connections configured in Cloud AI Security",
-        limits: "Lists what is connected for checking. A provider you use but have not connected does not appear.",
+        limits: "Lists what is connected for checking. A provider in use but not connected does not appear.",
         origin: "configuration",
         checkedAt: null,
       });
@@ -142,8 +154,8 @@ export function buildAnswers(input: AnswerInput): BuiltAnswers {
     const flags: string[] = [];
     const failing = read.filter((r) => r.status === "fail");
     const review = read.filter((r) => r.status === "needs_review");
-    if (s && failing.length > 0) flags.push(`${failing.length === 1 ? "A checked control" : `${failing.length} checked controls`} for this question currently ${failing.length === 1 ? "fails" : "fail"} (${failing.map((r) => r.checkId).join(", ")}). Make sure your statement does not contradict ${failing.length === 1 ? "it" : "them"}.`);
-    if (review.length > 0) flags.push(`${review.map((r) => r.checkId).join(", ")} ${review.length === 1 ? "needs" : "need"} your review: the setting was read but cannot settle the question on its own.`);
+    if (s && failing.length > 0) flags.push(`${failing.length === 1 ? "A checked control" : `${failing.length} checked controls`} for this question currently ${failing.length === 1 ? "fails" : "fail"} (${failing.map((r) => r.checkId).join(", ")}). The statement should not contradict ${failing.length === 1 ? "it" : "them"}.`);
+    if (review.length > 0) flags.push(`${review.map((r) => r.checkId).join(", ")} ${review.length === 1 ? "needs" : "need"} review: the setting was read but cannot settle the question on its own.`);
 
     counts[state]++;
     return { id: q.id, question: q.question, state, observed, statement: s ? { text: s.answer.trim(), attestedAt: s.attestedAt } : null, missing, flags };
@@ -153,11 +165,11 @@ export function buildAnswers(input: AnswerInput): BuiltAnswers {
 }
 
 /** "9 with a statement supplied, 8 partial, 6 needing your statement, 2 not readable, 0 not applicable" */
-export function completenessLine(counts: Record<AnswerState, number>): string {
+export function completenessLine(counts: Record<AnswerState, number>, audience: "owner" | "reader" = "owner"): string {
   return [
     `${counts.complete} with a statement supplied`,
     `${counts.partial} partial`,
-    `${counts.needs_statement} needing your statement`,
+    audience === "owner" ? `${counts.needs_statement} needing your statement` : `${counts.needs_statement} with no statement supplied`,
     `${counts.not_readable} not readable`,
     `${counts.not_applicable} not applicable`,
   ].join(", ");

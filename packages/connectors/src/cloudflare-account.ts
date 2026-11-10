@@ -85,9 +85,20 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
           const w = workers?.find((x) => x.name === r.script);
           if (w) w.routes.push(String(r.pattern));
         }
-        const ops = await attempt(`GET /zones/${z.id}/api_gateway/operations`, () => getJson<CfList<any>>(`${API}/zones/${z.id}/api_gateway/operations?per_page=200&feature=label`, headers));
-        // Only operations Cloudflare itself labelled cf-llm count. No label, no claim.
-        const llmOperations = (ops?.result ?? []).filter(hasLlmLabel).map((o: any) => ({ method: String(o.method), host: String(o.host), endpoint: String(o.endpoint) }));
+        // Cloudflare's own count of operations carrying the cf-llm managed label. No readable label, no claim.
+        const label = await attempt(`GET /zones/${z.id}/api_gateway/labels/managed/cf-llm`, () =>
+          getJson<CfOne<{ mapped_resources?: { operations?: number } }>>(`${API}/zones/${z.id}/api_gateway/labels/managed/cf-llm?with_mapped_resource_counts=true`, headers),
+        );
+        const counted = label?.result?.mapped_resources?.operations;
+        const llmOperationCount = typeof counted === "number" ? counted : undefined;
+        if (label && llmOperationCount === undefined) errors.push({ endpoint: `GET /zones/${z.id}/api_gateway/labels/managed/cf-llm`, status: 200, message: "The response carried no operation count." });
+        let llmOperations: ZoneFact["llmOperations"] = llmOperationCount === 0 ? [] : undefined;
+        if (llmOperationCount && llmOperationCount > 0) {
+          // The operations list does not document a label field. If it carries one, use it; otherwise the list stays unread.
+          const ops = await attempt(`GET /zones/${z.id}/api_gateway/operations`, () => getJson<CfList<any>>(`${API}/zones/${z.id}/api_gateway/operations?per_page=50`, headers));
+          const labelled = (ops?.result ?? []).filter(hasLlmLabel).map((o: any) => ({ method: String(o.method), host: String(o.host), endpoint: String(o.endpoint) }));
+          if (labelled.length === llmOperationCount) llmOperations = labelled;
+        }
         // A 404 on a ruleset entrypoint means "no rules yet", which is readable and empty.
         const ruleset = async (phase: string): Promise<string[] | undefined> => {
           const before = errors.length;
@@ -106,6 +117,7 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
           id: z.id,
           name: z.name,
           plan: z.plan?.name,
+          llmOperationCount,
           llmOperations,
           rateLimitExpressions: rlExpressions,
           customRuleExpressions: crExpressions,

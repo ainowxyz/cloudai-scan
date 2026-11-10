@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { anthropicConnector, assertReadOnly, cloudflareAccountConnector, cloudflareAiGatewayConnector, getJson, openaiConnector, redact } from "../src/index.js";
+import { anthropicConnector, assertReadOnly, cloudflareAccountConnector, cloudflareAiGatewayConnector, getJson, openaiConnector, redact, readNothing } from "../src/index.js";
 
 type Handler = (url: string, init?: RequestInit) => { status?: number; body: unknown } | undefined;
 
@@ -91,8 +91,33 @@ describe("openai connector", () => {
     expect(r.facts.auditLogEvents).toBe(1);
     expect(r.facts.orgSpendLimitCents).toBe(500000);
     expect(r.facts.modelsUsed30d).toEqual(["gpt-5.5", "text-embedding-3-large"]);
-    expect(r.errors.map((e) => `${e.endpoint} ${e.status}`)).toEqual(["GET /projects/p1/model_permissions 403"]);
+    expect(r.errors.map((e) => `${e.endpoint} ${e.status}`)).toEqual(["GET /projects/p1/model_permissions 403", "GET /spend_alerts 404"]);
+    expect(r.facts.orgSpendAlertCount).toBeUndefined();
     expect(calls.every((c) => c.method === "GET" && c.url.startsWith("https://api.openai.com/v1/organization/"))).toBe(true);
+  });
+
+  it("reads a 404 'none configured' answer as none, not as an unreadable setting", async () => {
+    mockFetch((url) => {
+      if (url.includes("/projects/p1/spend_limit")) return { status: 404, body: { error: { message: "No project spend limit is configured." } } };
+      if (url.includes("/projects/p1/model_permissions")) return { status: 404, body: { error: { message: "No model permissions found for project p1." } } };
+      if (url.endsWith("/organization/spend_limit")) return { status: 404, body: { error: { message: "No organization spend limit is configured." } } };
+      if (url.includes("/organization/spend_alerts")) return { body: { data: [{ id: "oa1" }, { id: "oa2" }], has_more: false } };
+      return routes(url);
+    });
+    const r = await openaiConnector.collect({ secret: "sk-admin-test" }, NOW);
+    const p = r.facts.projects!.find((x) => x.id === "p1")!;
+    expect(p.spendLimitCents).toBe(0);
+    expect(p.modelPermissions).toEqual({ mode: "none", modelCount: 0 });
+    expect(r.facts.orgSpendLimitCents).toBe(0);
+    expect(r.facts.orgSpendAlertCount).toBe(2);
+    expect(r.errors).toEqual([]);
+  });
+
+  it("keeps any other 404 as an unreadable setting", async () => {
+    mockFetch((url) => (url.includes("/projects/p1/spend_limit") ? { status: 404, body: { error: { message: "Unknown request URL" } } } : routes(url)));
+    const r = await openaiConnector.collect({ secret: "sk-admin-test" }, NOW);
+    expect(r.facts.projects!.find((x) => x.id === "p1")!.spendLimitCents).toBeUndefined();
+    expect(r.errors.map((e) => e.endpoint)).toContain("GET /projects/p1/spend_limit");
   });
 
   it("does not read keys of archived projects", async () => {
@@ -162,6 +187,22 @@ describe("anthropic connector", () => {
     expect(r.errors).toEqual([]);
   });
 
+  it("refuses a key that passes /me but cannot read organization settings", async () => {
+    mockFetch((url) => (url.endsWith("/me") ? { body: { id: "org" } } : { status: 403, body: { error: { message: "Missing permissions" } } }));
+    const v = await anthropicConnector.verify({ secret: "sk-ant-api-ordinary" });
+    expect(v.ok).toBe(false);
+    expect(v.error).toMatch(/cannot read organization settings/);
+    expect(v.error).toMatch(/Individual organizations/);
+    const r = await anthropicConnector.collect({ secret: "sk-ant-api-ordinary" }, NOW);
+    expect(readNothing(r)).toBe(true);
+  });
+
+  it("accepts a key that can read organization users", async () => {
+    mockFetch((url) => (url.includes("/users") ? { body: { data: [], has_more: false } } : { status: 403, body: { error: { message: "no" } } }));
+    expect((await anthropicConnector.verify({ secret: "sk-ant-admin-test" })).ok).toBe(true);
+    expect(readNothing(await anthropicConnector.collect({ secret: "sk-ant-admin-test" }, NOW))).toBe(false);
+  });
+
   it("an unreadable usage or spend endpoint stays undefined", async () => {
     mockFetch((url) => (url.includes("/users") ? { body: { data: [], has_more: false } } : { status: 403, body: { error: { message: "no access" } } }));
     const r = await anthropicConnector.collect({ secret: "sk-ant-admin-test" }, NOW);
@@ -206,6 +247,7 @@ describe("cloudflare account connector", () => {
       if (url.includes("/workers/scripts")) return { body: { success: true, result: [{ id: "api" }] } };
       if (url.includes("/workers/domains")) return { body: { success: true, result: [] } };
       if (url.includes("/workers/routes")) return { body: { success: true, result: [{ script: "api", pattern: "app.example.com/api/*" }] } };
+      if (url.includes("/api_gateway/labels/managed/cf-llm")) return { body: { success: true, result: { name: "cf-llm", mapped_resources: { operations: 1 } } } };
       if (url.includes("/api_gateway/operations")) return { body: { success: true, result: [{ method: "POST", host: "app.example.com", endpoint: "/api/chat", features: { label: { labels: ["cf-llm"] } } }, { method: "GET", host: "app.example.com", endpoint: "/health", features: { label: { labels: [] } } }] } };
       if (url.includes("/http_ratelimit/")) return { status: 404, body: { errors: [{ message: "not found" }] } };
       if (url.includes("/http_request_firewall_custom/")) return { body: { success: true, result: { rules: [{ expression: "true", enabled: false }] } } };
@@ -216,10 +258,45 @@ describe("cloudflare account connector", () => {
     });
     const r = await cloudflareAccountConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW);
     expect(r.facts.workers![0]).toMatchObject({ name: "api", secretNames: ["OPENAI_API_KEY"], routes: ["app.example.com/api/*"], observabilityEnabled: true, workersDevEnabled: false });
+    expect(r.facts.zones![0]!.llmOperationCount).toBe(1);
     expect(r.facts.zones![0]!.llmOperations).toEqual([{ method: "POST", host: "app.example.com", endpoint: "/api/chat" }]);
     expect(r.facts.zones![0]!.rateLimitExpressions).toEqual([]);
     expect(r.facts.zones![0]!.customRuleExpressions).toEqual([]);
     expect(r.facts.accessHostnames).toEqual(["admin.example.com"]);
     expect(r.errors).toEqual([]);
+  });
+
+  it("leaves the LLM endpoint count unread when the label request fails, and never sends an unsupported parameter", async () => {
+    const calls = mockFetch((url) => {
+      if (url.includes("/workers/scripts")) return { body: { success: true, result: [] } };
+      if (url.includes("/workers/domains")) return { body: { success: true, result: [] } };
+      if (url.includes("/workers/routes")) return { body: { success: true, result: [] } };
+      if (url.includes("/api_gateway/labels/managed/cf-llm")) return { status: 403, body: { errors: [{ message: "Authentication error" }] } };
+      if (url.includes("/rulesets/")) return { status: 404, body: { errors: [{ message: "not found" }] } };
+      if (url.includes("/bot_management")) return { body: { success: true, result: { fight_mode: false } } };
+      if (url.includes("/zones?")) return { body: { success: true, result: [{ id: "z1", name: "example.com" }] } };
+      if (url.includes("/access/apps")) return { body: { success: true, result: [] } };
+      return undefined;
+    });
+    const r = await cloudflareAccountConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW);
+    expect(r.facts.zones![0]!.llmOperationCount).toBeUndefined();
+    expect(r.facts.zones![0]!.llmOperations).toBeUndefined();
+    expect(r.errors.map((e) => e.endpoint)).toEqual(["GET /zones/z1/api_gateway/labels/managed/cf-llm"]);
+    expect(calls.some((c) => c.url.includes("feature=label") || c.url.includes("per_page=200"))).toBe(false);
+  });
+
+  it("reads zero labelled endpoints as zero", async () => {
+    mockFetch((url) => {
+      if (url.includes("/workers/")) return { body: { success: true, result: [] } };
+      if (url.includes("/api_gateway/labels/managed/cf-llm")) return { body: { success: true, result: { name: "cf-llm", mapped_resources: { operations: 0 } } } };
+      if (url.includes("/rulesets/")) return { status: 404, body: { errors: [{ message: "not found" }] } };
+      if (url.includes("/bot_management")) return { body: { success: true, result: { fight_mode: false } } };
+      if (url.includes("/zones?")) return { body: { success: true, result: [{ id: "z1", name: "example.com" }] } };
+      if (url.includes("/access/apps")) return { body: { success: true, result: [] } };
+      return undefined;
+    });
+    const r = await cloudflareAccountConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW);
+    expect(r.facts.zones![0]!.llmOperationCount).toBe(0);
+    expect(r.facts.zones![0]!.llmOperations).toEqual([]);
   });
 });

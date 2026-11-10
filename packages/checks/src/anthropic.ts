@@ -63,7 +63,7 @@ export const anthropicChecks: CheckDefinition<AnthropicFacts>[] = [
     severity: "low",
     source: "GET /v1/organizations/api_keys: status, created_at",
     docsUrl: DOCS,
-    limits: "Shows key age only. It does not show your rotation policy or when keys were last rotated.",
+    limits: "Shows key age only. It does not show the rotation policy or when keys were last rotated.",
     remediation: "Rotate keys older than a year.",
     answers: [{ framework: "generic-ai", itemId: "GAI-13" }],
     evaluate: (f) => {

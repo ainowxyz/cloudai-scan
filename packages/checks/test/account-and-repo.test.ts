@@ -13,6 +13,7 @@ describe("cloudflare account checks", () => {
       {
         id: "z1",
         name: "example.com",
+        llmOperationCount: 1,
         llmOperations: [{ method: "POST", host: "app.example.com", endpoint: "/api/chat" }],
         rateLimitExpressions: ['(http.request.uri.path eq "/api/login")'],
         customRuleExpressions: [],
@@ -53,6 +54,18 @@ describe("cloudflare account checks", () => {
     expect(by("ZONE-002").status).toBe("fail");
   });
   it("passes WRK-003 when the AI Worker is on a route", () => expect(by("WRK-003").status).toBe("pass"));
+  it("claims nothing about LLM endpoints when the labels could not be read", () => {
+    const unread = runChecks("cloudflare-account", { ...facts, zones: [{ id: "z1", name: "example.com", rateLimitExpressions: [], customRuleExpressions: [], botFightMode: false }] });
+    const of = (id: string) => unread.find((x) => x.id === id)!;
+    expect(of("ZONE-001").status).toBe("unverifiable");
+    expect(of("ZONE-002").status).toBe("unverifiable");
+    expect(of("ACC-001").observed[0]).toMatch(/not readable on 1 of 1 zone/);
+    expect(of("ACC-001").observed[0]).not.toMatch(/0 labelled/);
+  });
+  it("asks for review when Cloudflare gives a count but not the endpoints", () => {
+    const counted = runChecks("cloudflare-account", { ...facts, zones: [{ id: "z1", name: "example.com", llmOperationCount: 2, rateLimitExpressions: [], customRuleExpressions: [], botFightMode: true }] });
+    expect(counted.find((x) => x.id === "ZONE-001")?.status).toBe("needs_review");
+  });
   it("counts inventory", () => expect(by("ACC-001").summary).toContain("1 AI Worker"));
 });
 

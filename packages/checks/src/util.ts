@@ -14,6 +14,11 @@ export function agree(n: number, singular: string, plural: string): string {
   return n === 1 ? singular : plural;
 }
 
+/** "0 of 1 gateway has", "1 of 2 gateways have": after "X of N things" the verb follows the N things. */
+export function ofTotal(count: number, total: number, word: string, singular: string, plural: string): string {
+  return `${count} of ${pluralise(total, word)} ${agree(total, singular, plural)}`;
+}
+
 export function pluralise(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }

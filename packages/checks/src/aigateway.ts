@@ -1,5 +1,5 @@
 import type { AIGatewayFacts, CheckDefinition } from "./types.js";
-import { agree, notApplicable, notReadable, num, pluralise } from "./util.js";
+import { agree, notApplicable, notReadable, num, pluralise, ofTotal } from "./util.js";
 
 const API_DOCS = "https://developers.cloudflare.com/api/resources/ai_gateway/methods/get/";
 const LIST = "GET /accounts/{account_id}/ai-gateway/gateways";
@@ -27,7 +27,7 @@ export const aiGatewayChecks: CheckDefinition<AIGatewayFacts>[] = [
       const g = guard(f);
       if (g) return g;
       const open = f.gateways!.filter((x) => !x.authentication).map((x) => x.id);
-      const observed = [`${f.gateways!.length - open.length} of ${pluralise(f.gateways!.length, "gateway")} ${agree(f.gateways!.length - open.length, "requires", "require")} authentication`];
+      const observed = [`${ofTotal(f.gateways!.length - open.length, f.gateways!.length, "gateway", "requires", "require")} authentication`];
       return open.length === 0
         ? { status: "pass", summary: "Every gateway requires authentication.", evidence: f.gateways!.map((x) => x.id), observed }
         : { status: "fail", summary: `${pluralise(open.length, "gateway")} ${agree(open.length, "accepts", "accept")} unauthenticated requests.`, evidence: open, observed };
@@ -66,7 +66,7 @@ export const aiGatewayChecks: CheckDefinition<AIGatewayFacts>[] = [
     severity: "medium",
     source: `${LIST}: result[].rate_limiting_limit, result[].rate_limiting_interval`,
     docsUrl: API_DOCS,
-    limits: "This is the gateway-wide limit. It does not show per-user limits or limits on your own endpoints.",
+    limits: "This is the gateway-wide limit. It does not show per-user limits or limits on the company's own endpoints.",
     remediation: "Set a rate limit and interval on each gateway.",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
@@ -95,7 +95,7 @@ export const aiGatewayChecks: CheckDefinition<AIGatewayFacts>[] = [
       const g = guard(f);
       if (g) return g;
       const none = f.gateways!.filter((x) => !x.spendLimitSet).map((x) => x.id);
-      const observed = [`${f.gateways!.length - none.length} of ${pluralise(f.gateways!.length, "gateway")} ${agree(f.gateways!.length - none.length, "has", "have")} an enabled spend limit`];
+      const observed = [`${ofTotal(f.gateways!.length - none.length, f.gateways!.length, "gateway", "has", "have")} an enabled spend limit`];
       return none.length === 0
         ? { status: "pass", summary: "Every gateway has an enabled spend limit.", evidence: [], observed }
         : { status: "fail", summary: `${pluralise(none.length, "gateway")} ${agree(none.length, "has", "have")} no enabled spend limit.`, evidence: none, observed };

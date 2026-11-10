@@ -93,7 +93,7 @@ export interface OpenAIProjectFact {
   spendLimitCents?: number;
   /** GET …/data_retention: type, as OpenAI names it (organization_default, none, zero_data_retention, …). */
   dataRetention?: string;
-  /** GET …/model_permissions: mode and number of model ids. */
+  /** GET …/model_permissions: mode and number of model ids. mode "none" = OpenAI reported that no permissions are set. */
   modelPermissions?: { mode: "allow_list" | "deny_list" | string; modelCount: number };
 }
 
@@ -104,6 +104,8 @@ export interface OpenAIFacts {
   auditLogLatestAt?: string | null;
   /** GET /organization/spend_limit: threshold_amount in cents. 0 means no hard limit. */
   orgSpendLimitCents?: number;
+  /** GET /organization/spend_alerts: number of organization-level alerts. undefined = not readable. */
+  orgSpendAlertCount?: number;
   projects?: OpenAIProjectFact[];
   users?: { id: string; email: string; role: "owner" | "member" | string; addedAt: string }[];
   invites?: { email: string; status: string; invitedAt: string }[];
@@ -168,8 +170,13 @@ export interface ZoneFact {
   id: string;
   name: string;
   plan?: string;
-  /** Operations Cloudflare labelled as LLM endpoints (cf-llm managed label). */
-  llmOperations: { method: string; host: string; endpoint: string }[];
+  /**
+   * How many operations carry Cloudflare's cf-llm managed label on this zone.
+   * undefined = the label could not be read, which is different from zero.
+   */
+  llmOperationCount?: number;
+  /** The labelled operations themselves, when the API returned them. undefined = the list could not be read. */
+  llmOperations?: { method: string; host: string; endpoint: string }[];
   /** Rule expressions in the http_ratelimit phase. undefined = not readable. */
   rateLimitExpressions?: string[];
   /** Rule expressions in the http_request_firewall_custom phase. undefined = not readable. */

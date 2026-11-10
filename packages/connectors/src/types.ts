@@ -23,6 +23,16 @@ export interface CollectResult<P extends Provider> {
   endpoints: string[];
 }
 
+/**
+ * true when every request of a collection failed: the credential was accepted but read nothing.
+ * Such a run must not be reported as a successful read of the account.
+ */
+export function readNothing(result: { errors: { endpoint: string }[]; endpoints: string[] }): boolean {
+  if (result.endpoints.length === 0) return false;
+  const failed = new Set(result.errors.map((e) => e.endpoint));
+  return result.endpoints.every((e) => failed.has(e));
+}
+
 export interface CredentialGuide {
   /** The credential type, in the provider's words. */
   label: string;

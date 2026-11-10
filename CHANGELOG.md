@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.3 — 2026-11-10
+
+Rules version 2026.11.4. Found by testing against live accounts.
+
+- OpenAI: a 404 that says no spend limit or no model permissions are configured is a readable answer ("none"), so OAI-004 and OAI-005 now fail instead of reporting "not readable". Any other 404 stays unreadable.
+- OpenAI: OAI-011 reads organization-level spend alerts as well as project alerts. If the organization alerts cannot be read and a project has none, the result is `needs_review`, not `fail`.
+- Cloudflare account: LLM endpoint labels are read from `GET /zones/{zone_id}/api_gateway/labels/managed/cf-llm`. The previous request sent an unsupported `feature` parameter and failed, yet rules reported "no labelled endpoints". When the label cannot be read, ZONE-001 and ZONE-002 are `unverifiable` and ACC-001 says the labels were not readable instead of counting zero.
+- Anthropic: `verify` now tests an endpoint the rules need (`/users`) instead of `/me`, and refuses a key that cannot read organization settings, with the reason. Individual organizations have no Admin API.
+- New `readNothing(result)`: true when every request of a collection failed.
+- Answers: `ANSWER_STATE_LABEL_READER` and `completenessLine(counts, "reader")` give buyer-facing wording; "still needed" lines no longer say "you".
+- WRK-001 no longer feeds GAI-04 and WRK-003 no longer feeds GAI-23: neither setting answers those questions.
+- Grammar: "0 of 1 gateway has", not "have".
+
 ## 0.2.2 — 2026-11-10
 
 - Answers: the list of connected accounts is labelled as product configuration (`origin: "configuration"`), not as an API observation.

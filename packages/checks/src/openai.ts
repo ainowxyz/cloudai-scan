@@ -1,5 +1,5 @@
 import type { CheckDefinition, OpenAIApiKeyFact, OpenAIFacts, OpenAIProjectFact } from "./types.js";
-import { agree, daysBetween, notApplicable, notReadable, num, olderThanDays, pluralise, tally } from "./util.js";
+import { agree, daysBetween, notApplicable, notReadable, num, olderThanDays, pluralise, tally, ofTotal } from "./util.js";
 
 const UNUSED_DAYS = 90;
 const OLD_KEY_DAYS = 365;
@@ -79,7 +79,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     severity: "low",
     source: "GET /v1/organization/projects/{project_id}/api_keys: created_at",
     docsUrl: DOCS,
-    limits: "Shows key age only. It does not show your rotation policy or when keys were last rotated.",
+    limits: "Shows key age only. It does not show the rotation policy or when keys were last rotated.",
     remediation: "Rotate keys older than a year: create a replacement, deploy it, then delete the old key.",
     answers: [{ framework: "generic-ai", itemId: "GAI-13" }],
     evaluate: (f) => {
@@ -102,7 +102,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     severity: "medium",
     source: "GET /v1/organization/spend_limit: threshold_amount; GET /v1/organization/projects/{project_id}/spend_limit: threshold_amount, enforcement.status",
     docsUrl: DOCS,
-    limits: "Shows whether a hard limit is configured. The amount is not published, and whether it is low enough for your usage is your judgment.",
+    limits: "Shows whether a hard limit is configured. The amount is not published, and whether it is low enough for the organization's usage is a judgment this check cannot make.",
     remediation: "Set an organization monthly spend limit, or a spend limit on every active project.",
     answers: [{ framework: "generic-ai", itemId: "GAI-22" }],
     evaluate: (f) => {
@@ -112,7 +112,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       if (!projects) return notReadable("Spend limits could not be read with this admin key.");
       const known = projects.filter((p) => p.spendLimitCents !== undefined);
       const without = known.filter((p) => (p.spendLimitCents ?? 0) === 0);
-      const observed = [`${known.length - without.length} of ${pluralise(known.length, "active project")} ${agree(known.length - without.length, "has", "have")} a hard spend limit`];
+      const observed = [`${ofTotal(known.length - without.length, known.length, "active project", "has", "have")} a hard spend limit`];
       if (without.length > 0) {
         const org = f.orgSpendLimitCents === undefined ? "the organization limit could not be read" : "no organization limit is set";
         return { status: "fail", summary: `${pluralise(without.length, "active project")} ${agree(without.length, "has", "have")} no hard spend limit, and ${org}.`, evidence: without.slice(0, 10).map((p) => p.name), observed };
@@ -138,7 +138,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const known = projects.filter((p) => p.modelPermissions !== undefined);
       if (known.length === 0) return projects.length === 0 ? notApplicable("No active projects found.") : notReadable("Model permissions could not be read with this admin key.");
       const open = known.filter((p) => p.modelPermissions?.mode !== "allow_list");
-      const observed = [`${known.length - open.length} of ${pluralise(known.length, "active project")} ${agree(known.length - open.length, "uses", "use")} a model allow-list`];
+      const observed = [`${ofTotal(known.length - open.length, known.length, "active project", "uses", "use")} a model allow-list`];
       if (open.length > 0) return { status: "fail", summary: `${pluralise(open.length, "active project")} ${agree(open.length, "does", "do")} not use a model allow-list.`, evidence: open.slice(0, 10).map((p) => `${p.name}: ${p.modelPermissions?.mode ?? "none"}`), observed };
       if (known.length < projects.length) return notReadable(`Model permissions could not be read for ${pluralise(projects.length - known.length, "active project")}.`);
       return { status: "pass", summary: "Every active project uses a model allow-list.", evidence: [], observed };
@@ -152,7 +152,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     severity: "low",
     source: "GET /v1/organization/projects/{project_id}/data_retention: type",
     docsUrl: DOCS,
-    limits: "Reports OpenAI's retention type per project, in OpenAI's own terms. It gives no number of days and does not cover retention in your systems or at other providers.",
+    limits: "Reports OpenAI's retention type per project, in OpenAI's own terms. It gives no number of days and does not cover retention in the company's own systems or at other providers.",
     remediation: "Set an explicit retention type on each production project, or state the organization default in your retention statement.",
     answers: [{ framework: "generic-ai", itemId: "GAI-08" }],
     evaluate: (f) => {
@@ -227,7 +227,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     severity: "info",
     source: "GET /v1/organization/projects/{project_id}/rate_limits: model, max_requests_per_1_minute, max_tokens_per_1_minute",
     docsUrl: DOCS,
-    limits: "These are OpenAI's limits on your projects. Whether they were lowered from the defaults cannot be read, and they do not limit requests to your own endpoints.",
+    limits: "These are OpenAI's limits on the organization's projects. Whether they were lowered from the defaults cannot be read, and they do not limit requests to the company's own endpoints.",
     remediation: "",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
@@ -269,12 +269,12 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     id: "OAI-011",
     provider: "openai",
     title: "Spend alerts are configured",
-    description: "Counts the spend alerts on each active project. An alert emails the listed recipients when monthly spend passes a threshold. It does not stop usage.",
+    description: "Counts the spend alerts set for the organization and on each active project. An alert emails the listed recipients when monthly spend passes a threshold. It does not stop usage.",
     severity: "low",
-    source: "GET /v1/organization/projects/{project_id}/spend_alerts: threshold_amount, notification_channel.type",
+    source: "GET /v1/organization/spend_alerts and GET /v1/organization/projects/{project_id}/spend_alerts: number of alerts",
     docsUrl: DOCS,
-    limits: "An alert notifies; it does not cap spending. For the control that stops spending, see OAI-004.",
-    remediation: "Add a spend alert on every active project, addressed to a monitored mailbox.",
+    limits: "An alert notifies; it does not cap spending. For the control that stops spending, see OAI-004. Where organization-level alerts cannot be read, the result is Needs review rather than Fail.",
+    remediation: "Add a spend alert for the organization or on every active project, addressed to a monitored mailbox.",
     answers: [{ framework: "generic-ai", itemId: "GAI-22" }],
     evaluate: (f) => {
       const projects = active(f);
@@ -282,8 +282,24 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const known = projects.filter((p) => p.spendAlertCount !== undefined);
       if (known.length === 0) return projects.length === 0 ? notApplicable("No active projects found.") : notReadable("Spend alerts could not be read with this admin key.");
       const without = known.filter((p) => p.spendAlertCount === 0);
-      const observed = [`${known.length - without.length} of ${pluralise(known.length, "active project")} ${agree(known.length - without.length, "has", "have")} a spend alert`];
-      if (without.length > 0) return { status: "fail", summary: `${pluralise(without.length, "active project")} ${agree(without.length, "has", "have")} no spend alert.`, evidence: without.slice(0, 10).map((p) => p.name), observed };
+      const orgCount = f.orgSpendAlertCount;
+      const observed = [
+        ...(orgCount !== undefined ? [`${pluralise(orgCount, "organization-level spend alert")}`] : []),
+        `${ofTotal(known.length - without.length, known.length, "active project", "has", "have")} a spend alert`,
+      ];
+      if (orgCount !== undefined && orgCount > 0)
+        return { status: "pass", summary: `${pluralise(orgCount, "spend alert")} ${agree(orgCount, "is", "are")} set for the whole organization.`, evidence: [], observed };
+      if (without.length > 0) {
+        // Alerts can also be set for the whole organization. If that could not be read, a missing project alert settles nothing.
+        if (orgCount === undefined)
+          return {
+            status: "needs_review",
+            summary: `${pluralise(without.length, "active project")} ${agree(without.length, "has", "have")} no spend alert of ${agree(without.length, "its", "their")} own. Organization-level alerts could not be read, so check the organization's alerts in the OpenAI dashboard.`,
+            evidence: without.slice(0, 10).map((p) => p.name),
+            observed,
+          };
+        return { status: "fail", summary: `${pluralise(without.length, "active project")} ${agree(without.length, "has", "have")} no spend alert, and none is set for the organization.`, evidence: without.slice(0, 10).map((p) => p.name), observed };
+      }
       if (known.length < projects.length) return notReadable(`Spend alerts could not be read for ${pluralise(projects.length - known.length, "active project")}.`);
       return { status: "pass", summary: "Every active project has at least one spend alert.", evidence: [], observed };
     },

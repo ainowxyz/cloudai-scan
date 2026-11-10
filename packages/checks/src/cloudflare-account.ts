@@ -1,6 +1,6 @@
 import { looksLikeMcp, PROVIDER_KEY_NAME } from "./patterns.js";
-import type { CheckDefinition, CloudflareAccountFacts, WorkerFact } from "./types.js";
-import { agree, notApplicable, notReadable, pluralise } from "./util.js";
+import type { CheckDefinition, CloudflareAccountFacts, WorkerFact, ZoneFact } from "./types.js";
+import { agree, notApplicable, notReadable, pluralise, ofTotal } from "./util.js";
 
 const AI_BINDING_TYPES = new Set(["ai", "vectorize", "ai_search", "autorag"]);
 const SETTINGS = "GET /accounts/{account_id}/workers/scripts/{script_name}/settings";
@@ -15,6 +15,14 @@ function hostOf(route: string): string {
 
 const noWorkers = () => notReadable("Workers could not be read with this API token.");
 const noZones = () => notReadable("Zones could not be read with this API token.");
+const LABEL_SOURCE = "GET /zones/{zone_id}/api_gateway/labels/managed/cf-llm?with_mapped_resource_counts=true: result.mapped_resources.operations";
+const labelsUnread = (zones: ZoneFact[]) => zones.filter((z) => z.llmOperationCount === undefined).length;
+const noLabelled = (zones: ZoneFact[]) => {
+  const unread = labelsUnread(zones);
+  return unread > 0
+    ? notReadable(`Cloudflare's LLM endpoint labels could not be read for ${unread} of ${pluralise(zones.length, "zone")}, so nothing is claimed about them.`)
+    : notApplicable("Cloudflare has labelled no endpoints on these zones as LLM endpoints.");
+};
 
 export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] = [
   {
@@ -27,13 +35,13 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     docsUrl: "https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/settings/",
     limits: "Matches secret names only; values are never read. A match does not prove the Worker bypasses a gateway, and no match does not prove that no Worker holds a provider key under another name.",
     remediation: "Store the key in AI Gateway (BYOK) and call the gateway endpoint; delete the Worker secret.",
-    answers: [{ framework: "generic-ai", itemId: "GAI-04" }, { framework: "generic-ai", itemId: "GAI-14" }],
+    answers: [{ framework: "generic-ai", itemId: "GAI-14" }],
     evaluate: (f) => {
       if (!f.workers) return noWorkers();
       if (f.workers.length === 0) return notApplicable("No Workers found in this account.");
       const hits = f.workers.flatMap((w) => w.secretNames.filter((n) => PROVIDER_KEY_NAME.test(n)).map((n) => `${w.name}: ${n}`));
       const holders = new Set(hits.map((h) => h.split(":")[0])).size;
-      const observed = [`${holders} of ${pluralise(f.workers.length, "Worker")} ${agree(holders, "has", "have")} a secret named like a provider API key`];
+      const observed = [`${ofTotal(holders, f.workers.length, "Worker", "has", "have")} a secret named like a provider API key`];
       return hits.length === 0
         ? { status: "pass", summary: "No Worker secret is named like a provider API key.", evidence: [], observed }
         : { status: "fail", summary: `${pluralise(hits.length, "Worker secret")} ${agree(hits.length, "is", "are")} named like a provider API key.`, evidence: hits.slice(0, 15), observed };
@@ -72,7 +80,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     docsUrl: "https://developers.cloudflare.com/workers/configuration/routing/workers-dev/",
     limits: "Shows how the Worker is reachable. It does not show authentication or limits implemented inside the Worker.",
     remediation: "Attach a custom domain or route on a zone and disable the workers.dev subdomain for the Worker.",
-    answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
+    answers: [],
     evaluate: (f) => {
       if (!f.workers) return noWorkers();
       const ai = f.workers.filter(isAiWorker);
@@ -124,15 +132,25 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "LLM endpoints have a rate limiting rule",
     description: "Cloudflare labels endpoints that serve LLM traffic (the cf-llm label in API Shield). For each labelled endpoint this looks for an enabled rate limiting rule whose expression mentions its path or host.",
     severity: "high",
-    source: "GET /zones/{zone_id}/api_gateway/operations: features/labels containing cf-llm; GET /zones/{zone_id}/rulesets/phases/http_ratelimit/entrypoint: rules[].expression, enabled",
+    source: `${LABEL_SOURCE}; GET /zones/{zone_id}/rulesets/phases/http_ratelimit/entrypoint: rules[].expression, enabled`,
     docsUrl: "https://developers.cloudflare.com/waf/rate-limiting-rules/",
-    limits: "Covers only endpoints Cloudflare has labelled cf-llm. The match is on the rule expression text, so a rule that covers the endpoint in another way is not recognized, and rate limits implemented in your application are not read.",
+    limits: "Covers only endpoints Cloudflare has labelled cf-llm. Where Cloudflare reports a count but not the endpoints, the result is Needs review. The match is on the rule expression text, so a rule that covers the endpoint in another way is not recognized, and rate limits implemented in the application itself are not read.",
     remediation: "Create a rate limiting rule matching the endpoint path (1 rule is included on Free, 2 on Pro, 5 on Business).",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
       if (!f.zones) return noZones();
-      const zones = f.zones.filter((z) => z.llmOperations.length > 0);
-      if (zones.length === 0) return notApplicable("Cloudflare has labelled no endpoints on your zones as LLM endpoints.");
+      const zones = f.zones.filter((z) => (z.llmOperationCount ?? 0) > 0);
+      if (zones.length === 0) return noLabelled(f.zones);
+      const unlisted = zones.filter((z) => z.llmOperations === undefined);
+      if (unlisted.length > 0) {
+        const n = unlisted.reduce((sum, z) => sum + (z.llmOperationCount ?? 0), 0);
+        return {
+          status: "needs_review",
+          summary: `Cloudflare has labelled ${pluralise(n, "LLM endpoint")}, but the API did not say which, so they cannot be matched to rate limiting rules.`,
+          evidence: unlisted.map((z) => `${z.name}: ${pluralise(z.llmOperationCount ?? 0, "labelled endpoint")}, ${z.rateLimitExpressions === undefined ? "rate limiting rules not readable" : pluralise(z.rateLimitExpressions.length, "enabled rate limiting rule")}`),
+          observed: [`${pluralise(n, "labelled LLM endpoint")} on ${pluralise(unlisted.length, "zone")}; the endpoints themselves were not listed`],
+        };
+      }
       const uncovered: string[] = [];
       let total = 0;
       let unread = 0;
@@ -141,7 +159,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
           unread++;
           continue;
         }
-        for (const op of z.llmOperations) {
+        for (const op of z.llmOperations ?? []) {
           total++;
           const covered = z.rateLimitExpressions.some((e) => e.includes(op.endpoint) || e.includes(op.host) || e.trim() === "true");
           if (!covered) uncovered.push(`${z.name}: ${op.method} ${op.host}${op.endpoint}`);
@@ -159,15 +177,15 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "Zones with LLM endpoints have bot protection or custom rules",
     description: "For zones with labelled LLM endpoints, reads whether Bot Fight Mode is on or at least one enabled custom WAF rule exists.",
     severity: "medium",
-    source: "GET /zones/{zone_id}/bot_management: result.fight_mode, sbfm_definitely_automated; GET /zones/{zone_id}/rulesets/phases/http_request_firewall_custom/entrypoint: rules[].enabled",
+    source: LABEL_SOURCE + "; GET /zones/{zone_id}/bot_management: result.fight_mode, sbfm_definitely_automated; GET /zones/{zone_id}/rulesets/phases/http_request_firewall_custom/entrypoint: rules[].enabled",
     docsUrl: "https://developers.cloudflare.com/bots/get-started/",
     limits: "Shows that some bot protection or custom rule exists on the zone. It does not show that the rule applies to the LLM endpoint.",
     remediation: "Enable Bot Fight Mode (Free) or Super Bot Fight Mode, or add a custom rule challenging non-browser traffic to the endpoint.",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
       if (!f.zones) return noZones();
-      const zones = f.zones.filter((z) => z.llmOperations.length > 0);
-      if (zones.length === 0) return notApplicable("Cloudflare has labelled no endpoints on your zones as LLM endpoints.");
+      const zones = f.zones.filter((z) => (z.llmOperationCount ?? 0) > 0);
+      if (zones.length === 0) return noLabelled(f.zones);
       const known = zones.filter((z) => z.botFightMode !== undefined && z.customRuleExpressions !== undefined);
       const bare = known.filter((z) => !z.botFightMode && z.customRuleExpressions!.length === 0).map((z) => z.name);
       const observed = [`${known.length - bare.length} of ${pluralise(zones.length, "zone")} with LLM endpoints ${agree(known.length - bare.length, "has", "have")} bot protection or a custom rule`];
@@ -182,7 +200,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     title: "AI surface inventory",
     description: "Counts Workers with an AI binding or provider-key secret, and endpoints Cloudflare has labelled as LLM endpoints. This is an inventory, not a pass or fail rule.",
     severity: "info",
-    source: `${SETTINGS}: result.bindings[].type; GET /zones/{zone_id}/api_gateway/operations: features/labels containing cf-llm`,
+    source: `${SETTINGS}: result.bindings[].type; ${LABEL_SOURCE}`,
     docsUrl: "https://developers.cloudflare.com/api-shield/management-and-monitoring/endpoint-labels/",
     limits: "Counts what this Cloudflare account contains. AI features hosted elsewhere do not appear.",
     remediation: "",
@@ -190,8 +208,13 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     evaluate: (f) => {
       if (!f.workers || !f.zones) return notReadable("Workers or zones could not be read with this API token.");
       const ai = f.workers.filter(isAiWorker);
-      const ops = f.zones.reduce((n, z) => n + z.llmOperations.length, 0);
-      const text = `${pluralise(ai.length, "AI Worker")} and ${pluralise(ops, "labelled LLM endpoint")} across ${pluralise(f.zones.length, "zone")}`;
+      const unread = labelsUnread(f.zones);
+      const read = f.zones.length - unread;
+      const ops = f.zones.reduce((n, z) => n + (z.llmOperationCount ?? 0), 0);
+      // Only zones whose labels were read are counted. Unread zones are said to be unread, never counted as zero.
+      const endpoints = read === 0 ? "" : ` and ${pluralise(ops, "labelled LLM endpoint")} across ${pluralise(read, "zone")}`;
+      const gap = unread === 0 ? "" : `; endpoint labels not readable on ${unread} of ${pluralise(f.zones.length, "zone")}`;
+      const text = `${pluralise(ai.length, "AI Worker")}${endpoints}${gap}`;
       return { status: "pass", summary: `${text}.`, evidence: ai.map((w) => w.name).slice(0, 25), observed: [text] };
     },
   },

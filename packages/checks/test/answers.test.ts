@@ -78,7 +78,7 @@ describe("buildAnswers", () => {
     const a = get(buildAnswers({ providers: ["openai", "cloudflare-ai-gateway"], results: [...openai, ...gateway], statements: [] }), "GAI-08");
     expect(a.observed.map((o) => o.text).join(" ")).toMatch(/zero_data_retention/);
     expect(a.observed.map((o) => o.text).join(" ")).toMatch(/logging is on for 1 of 1 gateway/);
-    expect(a.missing[0]).toMatch(/in days at each provider and in your own systems/);
+    expect(a.missing[0]).toMatch(/in days at each provider and in the company/);
     expect(a.state).toBe("partial");
   });
 
@@ -123,7 +123,7 @@ describe("buildAnswers", () => {
     const a = get(buildAnswers({ providers: ["openai"], results: openai, statements: [stmt("GAI-12", "All keys are owned by service accounts.")] }), "GAI-12");
     expect(a.state).toBe("complete");
     expect(a.flags[0]).toMatch(/OAI-008/);
-    expect(a.flags[0]).toMatch(/does not contradict/);
+    expect(a.flags[0]).toMatch(/should not contradict/);
   });
 
   it("a statement of 'Not applicable' sets the state", () => {

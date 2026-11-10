@@ -103,6 +103,21 @@ describe("openai", () => {
     expect(status(projectLimit, "OAI-004").status).toBe("pass");
   });
 
+  it("an organization-level alert passes; a missing project alert with unread organization alerts needs review", () => {
+    const orgAlert = openai({ orgSpendAlertCount: 2, projects: [project({ spendAlertCount: 0 })] });
+    expect(status(orgAlert, "OAI-011").status).toBe("pass");
+    const unknown = openai({ orgSpendAlertCount: undefined, projects: [project({ spendAlertCount: 0 })] });
+    expect(status(unknown, "OAI-011").status).toBe("needs_review");
+    const none = openai({ orgSpendAlertCount: 0, projects: [project({ spendAlertCount: 0 })] });
+    expect(status(none, "OAI-011").status).toBe("fail");
+  });
+
+  it("OpenAI saying no limit and no model permissions exist is a fail, not an unreadable setting", () => {
+    const f = openai({ orgSpendLimitCents: 0, projects: [project({ spendLimitCents: 0, modelPermissions: { mode: "none", modelCount: 0 } })] });
+    expect(status(f, "OAI-004").status).toBe("fail");
+    expect(status(f, "OAI-005").status).toBe("fail");
+  });
+
   it("inherited retention needs review; a deny-list is not an allow-list", () => {
     const f = openai({ projects: [project({ dataRetention: "organization_default", modelPermissions: { mode: "deny_list", modelCount: 1 } })] });
     expect(status(f, "OAI-006").status).toBe("needs_review");
