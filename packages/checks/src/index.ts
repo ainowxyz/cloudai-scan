@@ -54,6 +54,7 @@ export function runChecks<P extends Provider>(provider: P, facts: FactsFor<P>): 
         status: r.status,
         summary: r.summary,
         observed: r.observed ?? [],
+        ...(r.table ? { table: r.table } : {}),
         evidence: r.evidence,
         remediation: r.status === "fail" ? def.remediation : undefined,
         answers: def.answers,

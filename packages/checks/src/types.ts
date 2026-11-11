@@ -44,10 +44,25 @@ export interface CheckResult {
    * Never people, email addresses, key or project names, amounts of money, or secrets.
    */
   observed: string[];
+  /**
+   * The same values as `observed`, as rows and named columns, when a rule reads several measurements per subject
+   * (for example a model with its request and token limits). Present only for such rules. It adds nothing that
+   * `observed` does not say; it exists so a reader does not have to take a sentence apart.
+   */
+  table?: ObservedTable;
   /** Internal detail for the account owner (project, key and Worker names). Never published. Never secrets or prompt content. */
   evidence: string[];
   remediation?: string;
   answers: QuestionnaireRef[];
+}
+
+/** Publishable values laid out as one row per subject. A null value was not returned by the provider. */
+export interface ObservedTable {
+  /** What each row is, for example "Model". */
+  subject: string;
+  /** What each value is, for example "Requests per minute". */
+  columns: string[];
+  rows: { name: string; values: (string | null)[] }[];
 }
 
 export interface CheckDefinition<F> {
@@ -64,7 +79,7 @@ export interface CheckDefinition<F> {
   limits: string;
   remediation: string;
   answers: QuestionnaireRef[];
-  evaluate: (facts: F) => Pick<CheckResult, "status" | "summary" | "evidence"> & { observed?: string[] };
+  evaluate: (facts: F) => Pick<CheckResult, "status" | "summary" | "evidence"> & { observed?: string[]; table?: ObservedTable };
 }
 
 /* ---------- Provider fact shapes (collected read-only by connectors) ---------- */

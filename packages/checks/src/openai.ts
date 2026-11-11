@@ -238,14 +238,17 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const used = f.modelsUsed30d;
       const models = [...new Set(limits.map((l) => l.model))].filter((m) => !used || used.some((u) => u === m || u.startsWith(`${m}-`) || m.startsWith(`${u}-`)));
       const range = (xs: number[]) => (xs.length === 0 ? null : Math.min(...xs) === Math.max(...xs) ? num(xs[0]!) : `${num(Math.min(...xs))} to ${num(Math.max(...xs))}`);
-      const observed = models.slice(0, 12).map((m) => {
+      // One row per model. The sentence form and the table are built from the same two values, so they cannot disagree.
+      const perModel = models.slice(0, 12).map((m) => {
         const rows = limits.filter((l) => l.model === m);
         const rpm = range(rows.map((r) => r.maxRequestsPer1Minute).filter((x): x is number => typeof x === "number"));
         const tpm = range(rows.map((r) => r.maxTokensPer1Minute).filter((x): x is number => typeof x === "number"));
-        return `${m}: ${[rpm && `${rpm} requests per minute`, tpm && `${tpm} tokens per minute`].filter(Boolean).join(", ")}`;
+        return { name: m, values: [rpm, tpm] };
       });
+      const observed = perModel.map(({ name, values: [rpm, tpm] }) => `${name}: ${[rpm && `${rpm} requests per minute`, tpm && `${tpm} tokens per minute`].filter(Boolean).join(", ")}`);
       if (observed.length === 0) return notApplicable("No rate limits were returned for the models used in the last 30 days.");
-      return { status: "pass", summary: `Read the rate limits for ${pluralise(observed.length, "model")} ${used ? "used in the last 30 days" : "configured in active projects"}.`, evidence: [], observed };
+      const table = { subject: "Model", columns: ["Requests per minute", "Tokens per minute"], rows: perModel };
+      return { status: "pass", summary: `Read the rate limits for ${pluralise(observed.length, "model")} ${used ? "used in the last 30 days" : "configured in active projects"}.`, evidence: [], observed, table };
     },
   },
   {

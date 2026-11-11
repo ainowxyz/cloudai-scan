@@ -59,6 +59,11 @@ describe("openai", () => {
     for (const id of ["OAI-001", "OAI-002", "OAI-003", "OAI-004", "OAI-005", "OAI-006", "OAI-007", "OAI-008", "OAI-011"]) expect(r.find((x) => x.id === id)?.status, id).toBe("pass");
     expect(status(openai(), "OAI-009").observed[0]).toBe("gpt-5.5: 500 requests per minute, 30,000 tokens per minute");
     expect(status(openai(), "OAI-009").observed.join(" ")).not.toContain("unused-model");
+    // The table carries the same values as the sentence, one row per model, and nothing else.
+    const limits = status(openai(), "OAI-009");
+    expect(limits.table).toEqual({ subject: "Model", columns: ["Requests per minute", "Tokens per minute"], rows: [{ name: "gpt-5.5", values: ["500", "30,000"] }] });
+    expect(limits.table!.rows.length).toBe(limits.observed.length);
+    expect(status(openai(), "OAI-001").table).toBeUndefined();
     const published = r.flatMap((x) => x.observed).join(" ");
     expect(published).not.toContain("a@b.c");
     expect(published).not.toContain("prod");

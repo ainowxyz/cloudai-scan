@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5 — 2026-11-11
+
+- OAI-009 also returns its values as a table (`table`: one row per model, with requests and tokens per minute as named columns). `observed` is unchanged and says the same thing; the table is for display, so a reader does not have to take a sentence apart. Answers carry it through as `ObservedLine.table`, with `who` naming the account.
+- No rule changed. Rules version stays 2026.11.4.
+
 ## 0.2.4 — 2026-11-10
 
 - Cloudflare account: when the cf-llm label response carries no operation count, the recorded reason now states what the count field contained, so the cause can be diagnosed. The result stays "not readable"; a missing count is never read as zero.

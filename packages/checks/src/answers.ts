@@ -4,7 +4,7 @@ import { cloudflareAccountChecks } from "./cloudflare-account.js";
 import { openaiChecks } from "./openai.js";
 import { genericAiAppendix } from "./questionnaires.js";
 import { repoChecks } from "./repo.js";
-import type { CheckStatus, Provider } from "./types.js";
+import type { CheckStatus, ObservedTable, Provider } from "./types.js";
 
 /**
  * How finished one answer is. This is a mechanical state: it says which parts are present.
@@ -45,6 +45,8 @@ export interface AnswerResultInput {
   status: CheckStatus | string;
   summary: string;
   observed: string[];
+  /** The rule's values as rows and columns, when it has them. Carried through unchanged. */
+  table?: ObservedTable | null;
   /** Optional label when one organization connects two accounts of the same provider. */
   connection?: string | null;
   /** When this result was read from the provider (ISO 8601). */
@@ -64,6 +66,10 @@ export interface ObservedLine {
   status: CheckStatus | string;
   /** What was read, in one line a buyer can check. */
   text: string;
+  /** Whose account the line is about, as it opens `text`: the provider, and the connection label when there are two. */
+  who: string;
+  /** The same values as `text`, as rows and columns, for rules that read several measurements per subject. */
+  table?: ObservedTable;
   /** The provider API call and fields behind it. */
   source: string;
   /** What the observation does not show. */
@@ -120,7 +126,7 @@ export function buildAnswers(input: AnswerInput): BuiltAnswers {
       const def = CATALOGUE.get(r.checkId)!;
       const who = `${LABEL[r.provider] ?? r.provider}${r.connection ? ` (${r.connection})` : ""}`;
       const text = r.observed.length ? r.observed.join("; ") : r.summary.replace(/\.$/, "");
-      return { checkId: r.checkId, provider: r.provider, status: r.status, text: `${who}: ${text}.`, source: def.source, limits: def.limits, origin: "provider_api", checkedAt: r.checkedAt ?? null };
+      return { checkId: r.checkId, provider: r.provider, status: r.status, text: `${who}: ${text}.`, who, ...(r.table ? { table: r.table } : {}), source: def.source, limits: def.limits, origin: "provider_api", checkedAt: r.checkedAt ?? null };
     });
 
     // The list of connected accounts comes from the product's own configuration, not from a provider API,
@@ -132,6 +138,7 @@ export function buildAnswers(input: AnswerInput): BuiltAnswers {
         provider: null,
         status: "pass",
         text: `Connected for checking: ${names.join(", ")}.`,
+        who: "",
         source: "Connections configured in Cloud AI Security",
         limits: "Lists what is connected for checking. A provider in use but not connected does not appear.",
         origin: "configuration",
