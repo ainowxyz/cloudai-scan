@@ -107,7 +107,7 @@ export interface BuiltAnswers {
 const LABEL: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic", "cloudflare-ai-gateway": "Cloudflare AI Gateway", "cloudflare-account": "Cloudflare account", repo: "Repository" };
 const CATALOGUE = new Map([...openaiChecks, ...anthropicChecks, ...aiGatewayChecks, ...cloudflareAccountChecks, ...repoChecks].map((c) => [c.id, c] as const));
 const READ = new Set(["pass", "fail", "needs_review"]);
-const NOT_APPLICABLE = /^\s*(n\/a|n\.a\.|not applicable)\b/i;
+const NOT_APPLICABLE = /^\s*(n\/a\b|n\.a\.|not applicable\b)/i;
 
 /**
  * Builds the 25 answers from what was read and what was stated, keeping the two apart.
