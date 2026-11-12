@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Fixes from a code review (#1). Rule outcomes change for OAI-002, OAI-003, ANT-003, ANT-004, OAI-009, OAI-011 and REPO-001; the rules version is not bumped here.
+
+- CLI: an option's value was taken as the command or the repository path, so `repo --fail-on medium` scanned a directory named `medium` and reported it clean. Values of `--fail-on`, `--token` and `--account` are no longer positional.
+- CLI: an unknown `--fail-on` value exits 2 instead of never failing, and `repo <path>` exits with an error when the path is not a directory.
+- Repository scan: a plaintext key in top-level wrangler `vars` is found even when an `env` overrides the same name.
+- REPO-001 matches a provider host and its subdomains only; `api.openai.com.evil.example` is no longer a direct provider call.
+- `HUGGING_FACE_*` variable and secret names are recognised as provider key names.
+- Cloudflare: the AI Gateway, zone and Access application lists read every page instead of the first 50 (100 for Access).
+- OAI-011: an organization-level spend alert passes even when project alerts or projects could not be read.
+- Key and invitation age rules compare exact elapsed time instead of whole days.
+- OAI-009 matches a used model to its own limits and dated snapshots only (`gpt-4o-mini` no longer counts `gpt-4o` as used), and its summary counts every model, not only the 12 listed.
+- Answers: a statement of `N.A.` is read as not applicable.
+
 ## 0.2.5 — 2026-11-11
 
 - OAI-009 also returns its values as a table (`table`: one row per model, with requests and tokens per minute as named columns). `observed` is unchanged and says the same thing; the table is for display, so a reader does not have to take a sentence apart. Answers carry it through as `ObservedLine.table`, with `who` naming the account.

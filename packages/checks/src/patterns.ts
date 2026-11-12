@@ -24,6 +24,12 @@ export const PROVIDER_HOSTS = [
   "openai.azure.com",
 ];
 
+/** A provider host or one of its subdomains. A name without a dot (bedrock-runtime) is the first label of a regional host. */
+export function isProviderHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return PROVIDER_HOSTS.some((p) => (p.includes(".") ? h === p || h.endsWith(`.${p}`) : h.startsWith(`${p}.`)));
+}
+
 export const GATEWAY_HOSTS = ["gateway.ai.cloudflare.com", "/ai-gateway/", "ai-gateway"];
 
 /** SDK packages that call providers directly unless configured with a gateway base URL. */

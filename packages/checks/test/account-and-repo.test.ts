@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PROVIDER_KEY_NAME, runChecks, type CloudflareAccountFacts, type RepoFacts } from "../src/index.js";
+import { isProviderHost, PROVIDER_KEY_NAME, runChecks, type CloudflareAccountFacts, type RepoFacts } from "../src/index.js";
 
 const NOW = "2026-11-03T00:00:00.000Z";
 
@@ -114,5 +114,12 @@ describe("catalogue completeness", () => {
 describe("provider key names", () => {
   it("matches Hugging Face keys however the words are joined", () => {
     for (const n of ["HUGGINGFACE_TOKEN", "HUGGING_FACE_API_KEY", "HF_TOKEN"]) expect(PROVIDER_KEY_NAME.test(n), n).toBe(true);
+  });
+});
+
+describe("provider hosts", () => {
+  it("matches a provider host and its subdomains, not a host that only contains it", () => {
+    for (const h of ["api.openai.com", "myres.openai.azure.com", "bedrock-runtime.us-east-1.amazonaws.com", "openrouter.ai"]) expect(isProviderHost(h), h).toBe(true);
+    for (const h of ["api.openai.com.evil.example", "notopenrouter.ai", "docs.anthropic.com"]) expect(isProviderHost(h), h).toBe(false);
   });
 });

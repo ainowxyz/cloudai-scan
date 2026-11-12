@@ -1,4 +1,4 @@
-import { GATEWAY_HOSTS, MCP_PACKAGES, PROVIDER_HOSTS, PROVIDER_SDKS } from "./patterns.js";
+import { GATEWAY_HOSTS, isProviderHost, MCP_PACKAGES, PROVIDER_SDKS } from "./patterns.js";
 import type { CheckDefinition, RepoFacts } from "./types.js";
 import { agree, pluralise } from "./util.js";
 
@@ -14,7 +14,7 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     remediation: "Point the SDK's base URL at your AI Gateway (gateway.ai.cloudflare.com/v1/<account>/<gateway>/<provider>) or use the unified /ai/v1 endpoints.",
     answers: [{ framework: "generic-ai", itemId: "GAI-04" }],
     evaluate: (f) => {
-      const hits = f.files.flatMap((file) => file.hosts.filter((h) => PROVIDER_HOSTS.some((p) => h.includes(p))).map((h) => `${file.path}: ${h}`));
+      const hits = f.files.flatMap((file) => file.hosts.filter(isProviderHost).map((h) => `${file.path}: ${h}`));
       return hits.length === 0
         ? { status: "pass", summary: "No direct provider hosts found in source.", evidence: [] }
         : { status: "fail", summary: `${pluralise(hits.length, "direct provider call")} in source.`, evidence: hits.slice(0, 20) };
