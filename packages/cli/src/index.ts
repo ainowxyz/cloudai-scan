@@ -26,13 +26,21 @@ Nothing is uploaded anywhere. Credentials are used only against api.cloudflare.c
 
 const SEVERITY_RANK: Record<Severity, number> = { high: 0, medium: 1, low: 2, info: 3 };
 
+/** Options that take a value. Their values are not positional arguments. */
+const VALUE_OPTIONS = new Set(["--fail-on", "--token", "--account"]);
+const FAIL_ON = new Set(["high", "medium", "low", "none"]);
+
 function arg(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 }
 
+function positionals(args: string[]): string[] {
+  return args.filter((a, i) => !a.startsWith("-") && !VALUE_OPTIONS.has(args[i - 1] ?? ""));
+}
+
 export async function main(argv: string[]): Promise<number> {
-  const cmd = argv.find((a) => !a.startsWith("-")) ?? "help";
+  const [cmd = "help", target] = positionals(argv);
   const json = argv.includes("--json");
   const failOn = (arg(argv, "--fail-on") ?? "high") as Severity | "none";
   const sections: Section[] = [];
@@ -40,6 +48,11 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === "help" || argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(HELP);
     return 0;
+  }
+
+  if (!FAIL_ON.has(failOn)) {
+    process.stderr.write(`Unknown --fail-on value: ${failOn}. Use high, medium, low or none.\n`);
+    return 2;
   }
 
   if (cmd === "rules") {
@@ -50,8 +63,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (cmd === "repo") {
-    const target = argv.filter((a) => !a.startsWith("-"))[1] ?? process.cwd();
-    const facts = await scanRepo(target);
+    const facts = await scanRepo(target ?? process.cwd());
     sections.push({ title: `Repository ${facts.root} (${facts.files.length} relevant files, ${facts.wrangler.length} wrangler configs)`, results: runChecks("repo", facts) });
   } else if (cmd === "account") {
     const secret = arg(argv, "--token") ?? process.env.CLOUDFLARE_API_TOKEN;

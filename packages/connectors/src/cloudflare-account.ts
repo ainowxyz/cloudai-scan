@@ -1,5 +1,5 @@
 import type { CloudflareAccountFacts, WorkerFact, ZoneFact } from "@cloudaisecurity/checks";
-import { getJson, ProviderHttpError, type CollectResult, type Connector, type Credentials, type VerifyResult } from "./types.js";
+import { cloudflareListAll, getJson, ProviderHttpError, type CollectResult, type Connector, type Credentials, type VerifyResult } from "./types.js";
 
 const API = "https://api.cloudflare.com/client/v4";
 type CfList<T> = { success: boolean; result: T[]; result_info?: { total_count?: number; total_pages?: number } };
@@ -71,7 +71,7 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
     }
 
     // Zones
-    const zonesRaw = (await attempt("GET /zones", () => getJson<CfList<any>>(`${API}/zones?per_page=50&account.id=${acct}`, headers)))?.result;
+    const zonesRaw = await attempt("GET /zones", () => cloudflareListAll<any>(`${API}/zones?account.id=${acct}`, headers));
     let zones: ZoneFact[] | undefined;
     const hasLlmLabel = (o: any): boolean => {
       const labels: unknown[] = [...(Array.isArray(o.labels) ? o.labels : []), ...(Array.isArray(o.features?.label?.labels) ? o.features.label.labels : [])];
@@ -127,8 +127,8 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
     }
 
     // Access applications
-    const apps = await attempt("GET /access/apps", () => getJson<CfList<any>>(`${API}/accounts/${acct}/access/apps?per_page=100`, headers));
-    const accessHostnames = apps ? apps.result.flatMap((a: any) => [a.domain, ...(a.self_hosted_domains ?? [])].filter(Boolean).map((d: string) => d.split("/")[0]!)) : undefined;
+    const apps = await attempt("GET /access/apps", () => cloudflareListAll<any>(`${API}/accounts/${acct}/access/apps`, headers, 100));
+    const accessHostnames = apps ? apps.flatMap((a: any) => [a.domain, ...(a.self_hosted_domains ?? [])].filter(Boolean).map((d: string) => d.split("/")[0]!)) : undefined;
 
     return { facts: { workers, zones, accessHostnames, collectedAt: now.toISOString() }, errors, endpoints };
   },

@@ -237,6 +237,18 @@ describe("cloudflare ai gateway connector", () => {
     mockFetch((url) => (url.includes("/ai-gateway/gateways") ? { body: { success: true, result: [] } } : undefined));
     expect((await cloudflareAiGatewayConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW)).facts.gateways).toEqual([]);
   });
+
+  it("reads every page of the gateway list", async () => {
+    const calls = mockFetch((url) => {
+      if (url.includes("/provider_configs")) return { body: { success: true, result: [] } };
+      if (url.includes("/ai-gateway/gateways?page=1")) return { body: { success: true, result: [{ id: "gw1" }], result_info: { page: 1, per_page: 1, total_count: 2 } } };
+      if (url.includes("/ai-gateway/gateways?page=2")) return { body: { success: true, result: [{ id: "gw2" }], result_info: { page: 2, per_page: 1, total_count: 2 } } };
+      return undefined;
+    });
+    const r = await cloudflareAiGatewayConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW);
+    expect(r.facts.gateways!.map((g) => g.id)).toEqual(["gw1", "gw2"]);
+    expect(calls.filter((c) => /\/ai-gateway\/gateways\?/.test(c.url)).length).toBe(2);
+  });
 });
 
 describe("cloudflare account connector", () => {

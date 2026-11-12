@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runChecks, type CloudflareAccountFacts, type RepoFacts } from "../src/index.js";
+import { PROVIDER_KEY_NAME, runChecks, type CloudflareAccountFacts, type RepoFacts } from "../src/index.js";
 
 const NOW = "2026-11-03T00:00:00.000Z";
 
@@ -108,5 +108,11 @@ describe("catalogue completeness", () => {
     const r = runChecks("repo", one);
     expect(r.find((x) => x.id === "REPO-002")!.summary).toBe("1 file uses a provider SDK without a gateway reference.");
     expect(r.find((x) => x.id === "REPO-003")!.summary).toBe("1 file calls Workers AI without a gateway id.");
+  });
+});
+
+describe("provider key names", () => {
+  it("matches Hugging Face keys however the words are joined", () => {
+    for (const n of ["HUGGINGFACE_TOKEN", "HUGGING_FACE_API_KEY", "HF_TOKEN"]) expect(PROVIDER_KEY_NAME.test(n), n).toBe(true);
   });
 });

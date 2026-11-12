@@ -61,22 +61,25 @@ async function scanSource(root: string, file: string): Promise<RepoFileFact | nu
 
 function collectWrangler(root: string, file: string, config: any): WranglerConfigFact {
   const envs = [config, ...Object.values(config?.env ?? {})];
-  const vars: Record<string, unknown> = Object.assign({}, ...envs.map((e: any) => e?.vars ?? {}));
+  // Every environment's vars are committed, so each is read on its own: an override in one env does not hide a value in another.
+  const vars: [string, unknown][] = envs.flatMap((e: any) => Object.entries(e?.vars ?? {}));
   const hasAiBinding = envs.some((e: any) => e?.ai?.binding);
   const obs = config?.observability?.enabled;
-  const names = Object.keys(vars);
+  const names = [...new Set(vars.map(([n]) => n))];
   return {
     path: path.relative(root, file),
     name: typeof config?.name === "string" ? config.name : null,
     hasAiBinding,
     observabilityEnabled: typeof obs === "boolean" ? obs : null,
-    secretLikeVarNames: names.filter((n) => typeof vars[n] === "string" && SECRET_VALUE.test(String(vars[n]).trim())),
+    secretLikeVarNames: [...new Set(vars.filter(([, v]) => typeof v === "string" && SECRET_VALUE.test(v.trim())).map(([n]) => n))],
     providerKeyVarNames: names.filter((n) => PROVIDER_KEY_NAME.test(n)),
   };
 }
 
 export async function scanRepo(root: string): Promise<RepoFacts> {
   root = path.resolve(root);
+  const s = await stat(root).catch(() => null);
+  if (!s?.isDirectory()) throw new Error(`Not a directory: ${root}`);
   const files: string[] = [];
   await walk(root, files);
   const facts: RepoFileFact[] = [];

@@ -1,5 +1,5 @@
 import type { AIGatewayFact, AIGatewayFacts } from "@cloudaisecurity/checks";
-import { getJson, ProviderHttpError, type CollectResult, type Connector, type Credentials, type VerifyResult } from "./types.js";
+import { cloudflareListAll, getJson, ProviderHttpError, type CollectResult, type Connector, type Credentials, type VerifyResult } from "./types.js";
 
 const API = "https://api.cloudflare.com/client/v4";
 
@@ -44,11 +44,11 @@ export const cloudflareAiGatewayConnector: Connector<"cloudflare-ai-gateway"> = 
       }
     };
 
-    const list = await attempt("GET /ai-gateway/gateways", () => getJson<CfList<any>>(`${API}/accounts/${acct}/ai-gateway/gateways?per_page=50`, headers));
+    const list = await attempt("GET /ai-gateway/gateways", () => cloudflareListAll<any>(`${API}/accounts/${acct}/ai-gateway/gateways`, headers));
     let gateways: AIGatewayFact[] | undefined;
     if (list) {
       gateways = [];
-      for (const g of list.result ?? []) {
+      for (const g of list) {
         const keys = await attempt(`GET /ai-gateway/gateways/${g.id}/provider_configs`, () => getJson<CfList<unknown>>(`${API}/accounts/${acct}/ai-gateway/gateways/${g.id}/provider_configs?per_page=1`, headers));
         const count = (o: unknown) => (o && typeof o === "object" ? Object.keys(o).length : 0);
         // Optional settings that are absent from the gateway object are not configured.
