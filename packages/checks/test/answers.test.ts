@@ -147,4 +147,9 @@ describe("buildAnswers", () => {
     expect(completenessLine(b.counts)).toMatch(/^1 with a statement supplied, \d+ partial, \d+ needing your statement, 0 not readable, 0 not applicable$/);
     expect(b.incomplete).toBe(24);
   });
+
+  it("reads N/A, N.A. and Not applicable statements as not applicable", () => {
+    for (const text of ["N/A", "N.A.", "n.a. we do not use AI", "Not applicable."]) expect(get(buildAnswers({ providers: [], results: [], statements: [stmt("GAI-01", text)] }), "GAI-01").state, text).toBe("not_applicable");
+    expect(get(buildAnswers({ providers: [], results: [], statements: [stmt("GAI-01", "Nachos.")] }), "GAI-01").state).not.toBe("not_applicable");
+  });
 });

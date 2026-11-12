@@ -132,6 +132,23 @@ export async function getJson<T>(url: string, headers: Record<string, string>, i
   return (await res.json()) as T;
 }
 
+/**
+ * Every page of a Cloudflare v4 list endpoint (page / per_page pagination). One page is not the whole list:
+ * stopping early would evaluate rules on part of the account. Stops at the last page, or after `maxPages`.
+ */
+export async function cloudflareListAll<T>(url: string, headers: Record<string, string>, perPage = 50, maxPages = 20): Promise<T[]> {
+  const out: T[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await getJson<{ result?: T[]; result_info?: { total_pages?: number; total_count?: number } }>(`${url}${url.includes("?") ? "&" : "?"}page=${page}&per_page=${perPage}`, headers);
+    const items = res.result ?? [];
+    out.push(...items);
+    const info = res.result_info;
+    const last = info?.total_pages !== undefined ? page >= info.total_pages : info?.total_count !== undefined ? out.length >= info.total_count : items.length < perPage;
+    if (last || items.length === 0) break;
+  }
+  return out;
+}
+
 export function isoFromUnix(seconds: number | null | undefined): string | null {
   return seconds ? new Date(seconds * 1000).toISOString() : null;
 }

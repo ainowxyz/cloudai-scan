@@ -1,6 +1,6 @@
 /** Shared detection patterns for Workers, repo scans and connectors. Names and hostnames only; never secret values. */
 
-export const PROVIDER_KEY_NAME = /(OPENAI|ANTHROPIC|CLAUDE|GEMINI|GOOGLE_(GENAI|AI|GENERATIVE)|MISTRAL|COHERE|HUGGING ?FACE|HF_TOKEN|OPENROUTER|GROQ|TOGETHER|PERPLEXITY|XAI|DEEPSEEK|REPLICATE|AZURE_OPENAI)/i;
+export const PROVIDER_KEY_NAME = /(OPENAI|ANTHROPIC|CLAUDE|GEMINI|GOOGLE_(GENAI|AI|GENERATIVE)|MISTRAL|COHERE|HUGGING[_ ]?FACE|HF_TOKEN|OPENROUTER|GROQ|TOGETHER|PERPLEXITY|XAI|DEEPSEEK|REPLICATE|AZURE_OPENAI)/i;
 
 /** Direct model-provider API hosts. Calls to these bypass any gateway. */
 export const PROVIDER_HOSTS = [
@@ -23,6 +23,12 @@ export const PROVIDER_HOSTS = [
   "bedrock-runtime",
   "openai.azure.com",
 ];
+
+/** A provider host or one of its subdomains. A name without a dot (bedrock-runtime) is the first label of a regional host. */
+export function isProviderHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return PROVIDER_HOSTS.some((p) => (p.includes(".") ? h === p || h.endsWith(`.${p}`) : h.startsWith(`${p}.`)));
+}
 
 export const GATEWAY_HOSTS = ["gateway.ai.cloudflare.com", "/ai-gateway/", "ai-gateway"];
 

@@ -117,6 +117,21 @@ describe("openai", () => {
     expect(status(none, "OAI-011").status).toBe("fail");
   });
 
+  it("an organization-level alert passes even when project alerts could not be read", () => {
+    for (const projects of [undefined, [], [project({ spendAlertCount: undefined })]]) expect(status(openai({ orgSpendAlertCount: 2, projects }), "OAI-011").status).toBe("pass");
+  });
+
+  it("counts key age in exact time, not whole days", () => {
+    const f = openai({ collectedAt: "2026-11-03T00:00:00.000Z", projects: [project({ apiKeys: [{ id: "k", name: "old", createdAt: "2025-11-02T02:00:00Z", lastUsedAt: "2026-08-04T02:00:00Z", ownerType: "service_account" }] })] });
+    expect(status(f, "OAI-002").status).toBe("fail");
+    expect(status(f, "OAI-003").status).toBe("fail");
+  });
+
+  it("matches rate limits to a used model and its dated snapshots only", () => {
+    const f = openai({ modelsUsed30d: ["gpt-4o-mini-2024-07-18"], projects: [project({ rateLimits: [{ model: "gpt-4o", maxRequestsPer1Minute: 1 }, { model: "gpt-4o-mini", maxRequestsPer1Minute: 2 }] })] });
+    expect(status(f, "OAI-009").observed).toEqual(["gpt-4o-mini: 2 requests per minute"]);
+  });
+
   it("OpenAI saying no limit and no model permissions exist is a fail, not an unreadable setting", () => {
     const f = openai({ orgSpendLimitCents: 0, projects: [project({ spendLimitCents: 0, modelPermissions: { mode: "none", modelCount: 0 } })] });
     expect(status(f, "OAI-004").status).toBe("fail");

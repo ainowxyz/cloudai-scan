@@ -22,6 +22,12 @@ function keysOf(f: OpenAIFacts): { keys: { project: string; key: OpenAIApiKeyFac
   };
 }
 
+/** "gpt-4o" and its dated snapshot "gpt-4o-2024-08-06" are the same model; "gpt-4o" and "gpt-4o-mini" are not. */
+function sameModel(a: string, b: string): boolean {
+  const snapshot = (long: string, short: string) => long.startsWith(`${short}-`) && /^(\d{4}-\d{2}-\d{2}|\d{4})$/.test(long.slice(short.length + 1));
+  return a === b || snapshot(a, b) || snapshot(b, a);
+}
+
 const label = (k: { project: string; key: OpenAIApiKeyFact }) => `${k.project}: ${k.key.name ?? k.key.id}`;
 
 export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
@@ -236,7 +242,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const limits = projects.flatMap((p) => p.rateLimits ?? []);
       if (limits.length === 0) return projects.some((p) => p.rateLimits === undefined) ? notReadable("Project rate limits could not be read with this admin key.") : notApplicable("No project rate limits were returned.");
       const used = f.modelsUsed30d;
-      const models = [...new Set(limits.map((l) => l.model))].filter((m) => !used || used.some((u) => u === m || u.startsWith(`${m}-`) || m.startsWith(`${u}-`)));
+      const models = [...new Set(limits.map((l) => l.model))].filter((m) => !used || used.some((u) => sameModel(u, m)));
       const range = (xs: number[]) => (xs.length === 0 ? null : Math.min(...xs) === Math.max(...xs) ? num(xs[0]!) : `${num(Math.min(...xs))} to ${num(Math.max(...xs))}`);
       // One row per model. The sentence form and the table are built from the same two values, so they cannot disagree.
       const perModel = models.slice(0, 12).map((m) => {
@@ -248,7 +254,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const observed = perModel.map(({ name, values: [rpm, tpm] }) => `${name}: ${[rpm && `${rpm} requests per minute`, tpm && `${tpm} tokens per minute`].filter(Boolean).join(", ")}`);
       if (observed.length === 0) return notApplicable("No rate limits were returned for the models used in the last 30 days.");
       const table = { subject: "Model", columns: ["Requests per minute", "Tokens per minute"], rows: perModel };
-      return { status: "pass", summary: `Read the rate limits for ${pluralise(observed.length, "model")} ${used ? "used in the last 30 days" : "configured in active projects"}.`, evidence: [], observed, table };
+      return { status: "pass", summary: `Read the rate limits for ${pluralise(models.length, "model")} ${used ? "used in the last 30 days" : "configured in active projects"}${models.length > perModel.length ? `; the first ${perModel.length} are listed` : ""}.`, evidence: [], observed, table };
     },
   },
   {
@@ -281,17 +287,18 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     answers: [{ framework: "generic-ai", itemId: "GAI-22" }],
     evaluate: (f) => {
       const projects = active(f);
-      if (!projects) return notReadable("Projects could not be read with this admin key.");
-      const known = projects.filter((p) => p.spendAlertCount !== undefined);
-      if (known.length === 0) return projects.length === 0 ? notApplicable("No active projects found.") : notReadable("Spend alerts could not be read with this admin key.");
+      const known = projects?.filter((p) => p.spendAlertCount !== undefined) ?? [];
       const without = known.filter((p) => p.spendAlertCount === 0);
       const orgCount = f.orgSpendAlertCount;
       const observed = [
         ...(orgCount !== undefined ? [`${pluralise(orgCount, "organization-level spend alert")}`] : []),
-        `${ofTotal(known.length - without.length, known.length, "active project", "has", "have")} a spend alert`,
+        ...(known.length > 0 ? [`${ofTotal(known.length - without.length, known.length, "active project", "has", "have")} a spend alert`] : []),
       ];
+      // An organization-level alert covers every project, so it settles the rule whatever could be read about projects.
       if (orgCount !== undefined && orgCount > 0)
         return { status: "pass", summary: `${pluralise(orgCount, "spend alert")} ${agree(orgCount, "is", "are")} set for the whole organization.`, evidence: [], observed };
+      if (!projects) return notReadable("Projects could not be read with this admin key.");
+      if (known.length === 0) return projects.length === 0 ? notApplicable("No active projects found.") : notReadable("Spend alerts could not be read with this admin key.");
       if (without.length > 0) {
         // Alerts can also be set for the whole organization. If that could not be read, a missing project alert settles nothing.
         if (orgCount === undefined)

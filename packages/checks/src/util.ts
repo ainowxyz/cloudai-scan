@@ -4,9 +4,10 @@ export function daysBetween(fromIso: string, toIso: string): number {
   return Math.floor((Date.parse(toIso) - Date.parse(fromIso)) / DAY_MS);
 }
 
+/** Exact elapsed time, not whole days: a key last used 90.9 days ago is older than 90 days. */
 export function olderThanDays(iso: string | null | undefined, days: number, now: string): boolean {
   if (!iso) return false;
-  return daysBetween(iso, now) > days;
+  return (Date.parse(now) - Date.parse(iso)) / DAY_MS > days;
 }
 
 /** Picks the verb form that agrees with a count: agree(1, "is", "are") === "is". */
