@@ -115,10 +115,26 @@ describe("rule expressions", () => {
   it("reads path, host and method conditions with and, or and not", () => {
     expect(expressionMatches('http.request.uri.path in {"/api/chat" "/api/complete"}', op)).toBe(true);
     expect(expressionMatches('starts_with(http.request.uri.path, "/api/")', op)).toBe(true);
-    expect(expressionMatches('http.request.uri.path contains "/chat" && http.host == "APP.example.com"', op)).toBe(true);
+    expect(expressionMatches('http.request.uri.path contains "/chat" && http.host == "app.example.com"', op)).toBe(true);
     expect(expressionMatches('(http.request.uri.path eq "/other") or (http.request.method eq "POST")', op)).toBe(true);
     expect(expressionMatches('http.request.uri.path ne "/api/chat"', op)).toBe(false);
     expect(expressionMatches('http.request.method in {"GET" "HEAD"}', op)).toBe(false);
+  });
+  it("compares literals with Cloudflare's case: a lower-case method is another method, an upper-case host cannot be told", () => {
+    expect(expressionMatches('http.request.method eq "post"', op)).toBe(false);
+    expect(expressionMatches('http.request.method in {"post" "get"}', op)).toBe(false);
+    expect(expressionMatches('http.request.method ne "post"', op)).toBe(true);
+    expect(expressionMatches('http.host eq "APP.example.com"', op)).toBeUndefined();
+    expect(expressionMatches('http.host in {"APP.example.com"}', op)).toBeUndefined();
+    expect(expressionMatches('http.host in {"app.example.com" "APP.example.com"}', op)).toBe(true);
+    expect(expressionMatches('ends_with(http.host, ".EXAMPLE.com")', op)).toBeUndefined();
+    expect(expressionMatches('starts_with(http.request.uri.path, "/API/")', op)).toBe(false);
+  });
+  it("gives xor precedence over or, and and over xor", () => {
+    expect(expressionMatches('http.request.uri.path eq "/api/chat" or http.host eq "other.example.com" xor http.request.method eq "POST"', op)).toBe(true);
+    expect(expressionMatches('not (http.request.uri.path eq "/api/chat" or http.host eq "other.example.com" xor http.request.method eq "POST")', op)).toBe(false);
+    expect(expressionMatches('http.request.method eq "POST" xor http.request.uri.path eq "/api/chat" or http.host eq "other.example.com"', op)).toBe(false);
+    expect(expressionMatches('http.request.method eq "POST" xor http.host eq "other.example.com" and http.request.uri.path eq "/api/chat"', op)).toBe(true);
   });
   it("cannot settle what it does not read", () => {
     expect(expressionMatches('http.request.uri.path eq "/api/chat" and cf.threat_score gt 10', op)).toBeUndefined();

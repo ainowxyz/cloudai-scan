@@ -134,7 +134,9 @@ export async function getJson<T>(url: string, headers: Record<string, string>, i
       reject(new ProviderHttpError(endpoint, 0, `No complete response within ${timeoutMs / 1000} seconds.`));
     }, timeoutMs);
   });
-  init?.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+  // The caller's signal still cancels, whether it was aborted before this call or later.
+  if (init?.signal?.aborted) controller.abort(init.signal.reason);
+  else init?.signal?.addEventListener("abort", () => controller.abort(init.signal?.reason), { once: true });
   const request = async (): Promise<T> => {
     const res = await fetch(url, { ...init, method, signal: controller.signal, redirect: "manual", headers: { accept: "application/json", ...headers, ...(init?.headers as Record<string, string> | undefined) } });
     if (!res.ok) {

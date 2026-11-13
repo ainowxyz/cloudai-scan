@@ -74,6 +74,20 @@ describe("request deadline", () => {
   });
 });
 
+describe("cancellation", () => {
+  it("does not send a request whose signal was aborted before the call", async () => {
+    let sent = false;
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent = !init?.signal?.aborted;
+      if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
+      return new Response("{}", { status: 200 });
+    });
+    const signal = AbortSignal.abort();
+    await expect(getJson("https://api.openai.com/v1/organization/users", {}, { signal })).rejects.toThrow();
+    expect(sent).toBe(false);
+  });
+});
+
 describe("redaction", () => {
   it("removes the credential and key-shaped strings from error text", async () => {
     expect(redact("Incorrect API key provided: sk-admin-abc123XYZ987.", "sk-admin-abc123XYZ987")).toBe("Incorrect API key provided: [redacted].");

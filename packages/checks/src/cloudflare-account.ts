@@ -27,7 +27,10 @@ type Operation = { method: string; host: string; endpoint: string };
 /**
  * Whether a rule expression in Cloudflare's Rules language matches requests to an operation: true, false, or undefined
  * when this reader cannot tell. It knows the path, host and method fields with eq, ne, in, contains, starts_with and
- * ends_with, combined with and, or and not. Anything else (regular expressions, wildcards, lists, other fields) is undefined.
+ * ends_with, combined with not, and, xor and or (in that order of precedence). Anything else (regular expressions,
+ * wildcards, lists, other fields) is undefined. Comparisons are case-sensitive, as Cloudflare's are. The method is the
+ * operation's, upper case. The host is compared lower case, as clients send it; a host literal with an upper-case letter
+ * matches only a client that sends that case, so it is undefined.
  */
 const CONNECTIVE = /^(and|or|xor|&&|\|\||\^\^|\))$/;
 
@@ -46,7 +49,8 @@ export function expressionMatches(expression: string, op: Operation): boolean | 
     if (field === "http.request.method") return op.method.toUpperCase();
     return undefined;
   };
-  const norm = (field: string, v: string) => (field === "http.host" ? v.toLowerCase() : field === "http.request.method" ? v.toUpperCase() : v);
+  /** A literal compared as written, or undefined for a host literal whose case decides the match. */
+  const exact = (field: string, lit: string): string | undefined => (field === "http.host" && lit !== lit.toLowerCase() ? undefined : lit);
   const and = (a: boolean | undefined, b: boolean | undefined) => (a === false || b === false ? false : a === true && b === true ? true : undefined);
   const or = (a: boolean | undefined, b: boolean | undefined) => (a === true || b === true ? true : a === false && b === false ? false : undefined);
   const primary = (): boolean | undefined => {
@@ -73,7 +77,8 @@ export function expressionMatches(expression: string, op: Operation): boolean | 
       if ((fn === "starts_with" || fn === "ends_with") && args.length === 3 && args[1] === ",") {
         const v = valueOf(args[0]!);
         if (v === undefined) return undefined;
-        const lit = norm(args[0]!, literal(args[2]));
+        const lit = exact(args[0]!, literal(args[2]));
+        if (lit === undefined) return undefined;
         return fn === "starts_with" ? v.startsWith(lit) : v.endsWith(lit);
       }
       // A function used as a value, such as lower(http.host) eq "x", is compared by nobody here.
@@ -94,11 +99,15 @@ export function expressionMatches(expression: string, op: Operation): boolean | 
       }
       const set = skipOperand();
       // Anything but strings in the set (a range, a number) is not read.
-      return v === undefined || !set.every((a) => a.startsWith('"') || a === ",") ? undefined : set.filter((a) => a !== ",").map((a) => norm(t, literal(a))).includes(v);
+      if (v === undefined || !set.every((a) => a.startsWith('"') || a === ",")) return undefined;
+      const members = set.filter((a) => a !== ",").map((a) => literal(a));
+      if (members.includes(v)) return true;
+      return members.every((a) => exact(t, a) !== undefined) ? false : undefined;
     }
     const rhs = next() ?? fail();
     if (v === undefined || !rhs.startsWith('"')) return undefined;
-    const lit = norm(t, literal(rhs));
+    const lit = exact(t, literal(rhs));
+    if (lit === undefined) return undefined;
     if (operator === "eq" || operator === "==") return v === lit;
     if (operator === "ne" || operator === "!=") return v !== lit;
     if (operator === "contains") return v.includes(lit);
@@ -128,12 +137,20 @@ export function expressionMatches(expression: string, op: Operation): boolean | 
     }
     return v;
   };
-  const disjunction = (): boolean | undefined => {
+  const exclusive = (): boolean | undefined => {
     let v = conjunction();
-    while (peek() === "or" || peek() === "||" || peek() === "xor" || peek() === "^^") {
-      const connective = next();
+    while (peek() === "xor" || peek() === "^^") {
+      next();
       const w = conjunction();
-      v = connective === "or" || connective === "||" ? or(v, w) : v === undefined || w === undefined ? undefined : v !== w;
+      v = v === undefined || w === undefined ? undefined : v !== w;
+    }
+    return v;
+  };
+  const disjunction = (): boolean | undefined => {
+    let v = exclusive();
+    while (peek() === "or" || peek() === "||") {
+      next();
+      v = or(v, exclusive());
     }
     return v;
   };
