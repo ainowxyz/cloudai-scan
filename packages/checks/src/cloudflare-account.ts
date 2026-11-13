@@ -17,9 +17,18 @@ function hostOf(route: string): string {
 const unclassified = (workers: WorkerFact[]) => workers.filter((w) => w.settingsReadable === false).length;
 const settingsUnread = (n: number) => `Settings could not be read for ${pluralise(n, "Worker")}, so ${agree(n, "it", "they")} could not be classified.`;
 
-/** Hosts an Access application protects in full. One limited to a path (host/admin/*) covers only that path, so it is left out. */
+/**
+ * Hosts an Access application protects in full: `host` or `host/*`, which Cloudflare documents as covering every path.
+ * One limited to a path (host/admin/*) covers only that path, so it is left out. So is `host/`, the root path alone:
+ * Cloudflare does not say it covers the paths under it, so it is not taken to.
+ */
 function wholeHostAccess(domains: string[]): Set<string> {
-  return new Set(domains.map((d) => d.toLowerCase().replace(/\/\*?$/, "")).filter((d) => !d.includes("/")));
+  return new Set(domains.map((d) => d.toLowerCase().replace(/\/\*$/, "")).filter((d) => !d.includes("/")));
+}
+
+/** Hosts that have an Access application for the root path alone (`host/`). */
+function rootPathAccess(domains: string[]): Set<string> {
+  return new Set(domains.map((d) => d.toLowerCase()).filter((d) => d.endsWith("/") && !d.slice(0, -1).includes("/")).map((d) => d.slice(0, -1)));
 }
 
 type Operation = { method: string; host: string; endpoint: string };
@@ -259,7 +268,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     severity: "high",
     source: "GET /accounts/{account_id}/access/apps: result[].domain, self_hosted_domains; Workers routes, custom domains and workers.dev setting",
     docsUrl: "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/",
-    limits: "When no Access application is found, this result says exactly that. It does not mean the server is unauthenticated: a server that implements its own OAuth flow is protected without Access. Add a note to the result describing the control in use. An Access application limited to a path does not count as covering the hostname.",
+    limits: "When no Access application is found, this result says exactly that. It does not mean the server is unauthenticated: a server that implements its own OAuth flow is protected without Access. Add a note to the result describing the control in use. An Access application limited to a path does not count as covering the hostname; that includes one for the root path alone (host/).",
     remediation: "Create a Cloudflare Access application for the MCP hostname, or require OAuth inside the server and record that in a note on this result.",
     answers: [],
     evaluate: (f) => {
@@ -270,6 +279,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
       if (mcp.length === 0) return unread > 0 ? notReadable(settingsUnread(unread)) : notApplicable("No Workers look like MCP servers.");
       if (f.accessHostnames === undefined) return notReadable(`${pluralise(mcp.length, "MCP-like Worker")} found; Access applications could not be read with this API token.`, mcp.map((w) => w.name));
       const access = wholeHostAccess(f.accessHostnames);
+      const rootOnly = rootPathAccess(f.accessHostnames);
       const open = mcp.filter((w) => {
         const hosts = [...w.routes.map(hostOf), ...w.customDomains];
         if (w.workersDevEnabled) return true;
@@ -281,8 +291,13 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
         ? { status: "pass", summary: "Every MCP-like Worker hostname belongs to a Cloudflare Access application.", evidence: mcp.map((w) => w.name), observed }
         : {
             status: "needs_review",
-            summary: `No Cloudflare Access application covers ${pluralise(open.length, "MCP-like Worker")}. Authentication inside the Worker, such as OAuth, cannot be read from the account.`,
-            evidence: open.map((w) => `${w.name}: ${[...w.routes, ...w.customDomains, ...(w.workersDevEnabled ? ["workers.dev"] : [])].join(", ")}`),
+            summary: `No Cloudflare Access application covers every hostname of ${pluralise(open.length, "MCP-like Worker")} in full. Authentication inside the Worker, such as OAuth, cannot be read from the account.`,
+            evidence: open.map((w) => {
+              // Said, so the reader knows an application exists and why it was not counted.
+              const root = [...new Set([...w.routes.map(hostOf), ...w.customDomains].map((h) => h.toLowerCase()).filter((h) => rootOnly.has(h)))];
+              const note = root.length > 0 ? ` (an Access application covers only the root path of ${root.join(", ")})` : "";
+              return `${w.name}: ${[...w.routes, ...w.customDomains, ...(w.workersDevEnabled ? ["workers.dev"] : [])].join(", ")}${note}`;
+            }),
             observed,
           };
     },
