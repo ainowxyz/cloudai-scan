@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.6 — 2026-11-13
 
-Fixes from a code review (#1). Rule outcomes change for OAI-002, OAI-003, ANT-003, ANT-004, OAI-009, OAI-011 and REPO-001; the rules version is not bumped here.
+Rules version 2026.11.5. Fixes from three rounds of code review. Results are stricter about what was actually read: where a rule used to pass, fail or call itself not applicable on a partial read, it now says Not readable or Needs review.
+
+Fixes from a code review (#1). Rule outcomes change for OAI-002, OAI-003, ANT-003, ANT-004, OAI-009, OAI-011 and REPO-001.
 
 - CLI: an option's value was taken as the command or the repository path, so `repo --fail-on medium` scanned a directory named `medium` and reported it clean. Values of `--fail-on`, `--token` and `--account` are no longer positional.
 - CLI: an unknown `--fail-on` value exits 2 instead of never failing, and `repo <path>` exits with an error when the path is not a directory.
@@ -15,7 +17,7 @@ Fixes from a code review (#1). Rule outcomes change for OAI-002, OAI-003, ANT-00
 - OAI-009 matches a used model to its own limits and dated snapshots only (`gpt-4o-mini` no longer counts `gpt-4o` as used), and its summary counts every model, not only the 12 listed.
 - Answers: a statement of `N.A.` is read as not applicable.
 
-Fixes from the whole-codebase review (#3, #4). Rule outcomes change for WRK-001 to WRK-004, ZONE-001, ZONE-002, ACC-001, OAI-004, OAI-009, OAI-010 and REPO-001 to REPO-006; the rules version is not bumped here.
+Fixes from the whole-codebase review (#3, #4). Rule outcomes change for WRK-001 to WRK-004, ZONE-001, ZONE-002, ACC-001, OAI-004, OAI-009, OAI-010 and REPO-001 to REPO-006.
 
 - Cloudflare account: a Worker whose settings could not be read is marked `settingsReadable: false`. WRK-001 to WRK-004 no longer pass, or call themselves not applicable, on its empty bindings and secrets, and ACC-001 says how many Workers could not be classified.
 - Cloudflare account: every Worker is listed. Settings are still read for the first 200 only; the rest are marked unread and an error says so, instead of being dropped from the account.
