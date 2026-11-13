@@ -71,6 +71,21 @@ describe("coverage", () => {
     await writeFile(path.join(dir, "wrangler.toml"), "name = ");
     expect((await scanRepo(dir)).notScanned).toEqual(["wrangler.toml: could not be read or parsed"]);
   });
+
+  it("names a wrangler.jsonc with a syntax error instead of reading the part that parsed", async () => {
+    // The JSON parser recovers from the missing comma and would return the name and the AI binding alone.
+    await writeFile(path.join(dir, "wrangler.jsonc"), `{ "name": "app", "ai": { "binding": "AI" } "observability": { "enabled": false } }`);
+    const facts = await scanRepo(dir);
+    expect(facts.wrangler).toEqual([]);
+    expect(facts.notScanned).toEqual(["wrangler.jsonc: could not be read or parsed"]);
+  });
+
+  it("reads a wrangler.jsonc with comments and trailing commas, as wrangler does", async () => {
+    await writeFile(path.join(dir, "wrangler.jsonc"), `{\n  // the app\n  "name": "app",\n  "ai": { "binding": "AI", },\n}\n`);
+    const facts = await scanRepo(dir);
+    expect(facts.notScanned).toEqual([]);
+    expect(facts.wrangler.map((w) => [w.name, w.hasAiBinding])).toEqual([["app", true]]);
+  });
 });
 
 describe("wrangler environments", () => {

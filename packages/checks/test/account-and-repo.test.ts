@@ -89,6 +89,19 @@ describe("cloudflare account checks", () => {
     expect(whole.find((x) => x.id === "WRK-004")?.status).toBe("pass");
   });
 
+  it("an Access application for the root path alone does not cover the whole host, and the result says it is there", () => {
+    const mcp = [{ ...facts.workers![1]!, workersDevEnabled: false }];
+    const root = runChecks("cloudflare-account", { ...facts, workers: mcp, accessHostnames: ["mcp.example.com/"] }).find((x) => x.id === "WRK-004")!;
+    expect(root.status).toBe("needs_review");
+    expect(root.evidence[0]).toMatch(/only the root path of mcp\.example\.com/);
+    const bare = runChecks("cloudflare-account", { ...facts, workers: mcp, accessHostnames: ["mcp.example.com"] }).find((x) => x.id === "WRK-004")!;
+    expect(bare.status).toBe("pass");
+    // A path-limited application is not described as a root-path one.
+    const scoped = runChecks("cloudflare-account", { ...facts, workers: mcp, accessHostnames: ["mcp.example.com/admin/"] }).find((x) => x.id === "WRK-004")!;
+    expect(scoped.status).toBe("needs_review");
+    expect(scoped.evidence[0]).not.toMatch(/root path/);
+  });
+
   const zone = (rateLimitExpressions: string[]) => ({ ...facts.zones![0]!, rateLimitExpressions, botFightMode: true });
   const zone001 = (rateLimitExpressions: string[]) => runChecks("cloudflare-account", { ...facts, zones: [zone(rateLimitExpressions)] }).find((x) => x.id === "ZONE-001")!.status;
   it("ZONE-001 passes only on a rule that matches the endpoint, never on one that excludes it", () => {
@@ -173,6 +186,17 @@ describe("repo checks", () => {
     const partial = runChecks("repo", { root: "/tmp/app", files: [], wrangler: [], notScanned: ["src/big.js: larger than 512 KB"], collectedAt: NOW });
     for (const id of ["REPO-001", "REPO-002", "REPO-003", "REPO-004", "REPO-005", "REPO-006"]) expect(partial.find((x) => x.id === id)?.status, id).toBe("unverifiable");
     expect(runChecks("repo", { ...facts, notScanned: ["src/big.js: larger than 512 KB"] }).find((x) => x.id === "REPO-001")?.status).toBe("fail");
+  });
+
+  it("REPO-005 does not fail for a missing Access or OAuth check when part of the repository was not scanned", () => {
+    const notScanned = ["src/auth.js: larger than 512 KB"];
+    const partial = runChecks("repo", { ...facts, notScanned }).find((x) => x.id === "REPO-005")!;
+    expect(partial.status).toBe("unverifiable");
+    expect(partial.evidence).toEqual(notScanned);
+    // A check that was found still passes, and a complete scan without one still fails.
+    const found = { ...facts, files: facts.files.map((file) => (file.path === "src/llm.ts" ? { ...file, hasAccessCheck: true } : file)) };
+    expect(runChecks("repo", { ...found, notScanned }).find((x) => x.id === "REPO-005")?.status).toBe("pass");
+    expect(runChecks("repo", { ...facts, notScanned: [] }).find((x) => x.id === "REPO-005")?.status).toBe("fail");
   });
 
   it("REPO-006 pairs each environment's AI binding with the logging setting that applies to it", () => {

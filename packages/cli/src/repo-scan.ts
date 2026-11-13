@@ -1,5 +1,5 @@
 import { PROVIDER_KEY_NAME, SECRET_VALUE, type RepoFacts, type RepoFileFact, type WranglerConfigFact } from "@cloudaisecurity/checks";
-import { parse as parseJsonc } from "jsonc-parser";
+import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -89,6 +89,19 @@ function collectWrangler(root: string, file: string, config: any): WranglerConfi
   };
 }
 
+/**
+ * A wrangler configuration, parsed. Throws on a syntax error: the JSON parser recovers from one and returns what it
+ * could read, and a configuration read in part must not count as read. Comments and trailing commas are not errors,
+ * as wrangler accepts both.
+ */
+function parseWrangler(file: string, text: string): unknown {
+  if (file.endsWith(".toml")) return parseToml(text);
+  const errors: ParseError[] = [];
+  const config = parseJsonc(text, errors, { allowTrailingComma: true });
+  if (errors.length > 0) throw new Error(`${errors.length} syntax error(s)`);
+  return config;
+}
+
 export async function scanRepo(root: string): Promise<RepoFacts> {
   root = path.resolve(root);
   const s = await stat(root).catch(() => null);
@@ -103,8 +116,7 @@ export async function scanRepo(root: string): Promise<RepoFacts> {
     if (WRANGLER_RE.test(path.basename(f))) {
       try {
         const text = await readFile(f, "utf8");
-        const cfg = f.endsWith(".toml") ? parseToml(text) : parseJsonc(text);
-        wrangler.push(collectWrangler(root, f, cfg));
+        wrangler.push(collectWrangler(root, f, parseWrangler(f, text)));
       } catch {
         notScanned.push(`${rel}: could not be read or parsed`);
       }

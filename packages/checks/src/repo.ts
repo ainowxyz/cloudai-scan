@@ -99,9 +99,13 @@ const rules: CheckDefinition<RepoFacts>[] = [
     answers: [{ framework: "generic-ai", itemId: "GAI-14" }],
     evaluate: (f) => {
       const mcp = f.files.filter((file) => file.hasMcpServer || file.imports.some((i) => MCP_PACKAGES.some((m) => i === m || i.startsWith(m + "/"))));
-      // A pass here rests on a check that was found, so only "none found" depends on the whole repository.
+      // A pass here rests on a check that was found. "None found", of MCP code or of a check, depends on the whole repository.
       if (mcp.length === 0) return scanned(f, { status: "not_applicable", summary: "No MCP server code found.", evidence: [] });
       const anyAccess = f.files.some((file) => file.hasAccessCheck);
+      const skipped = f.notScanned ?? [];
+      // The check may be in a file that was left out, so its absence from the files read settles nothing.
+      if (!anyAccess && skipped.length > 0)
+        return notReadable(`${pluralise(mcp.length, "MCP server file")} found, and no Access or OAuth check in the files scanned. Part of the repository was not scanned (${pluralise(skipped.length, "item")}), so this cannot be settled.`, skipped.slice(0, 20));
       return anyAccess
         ? { status: "pass", summary: "MCP server code is present alongside an Access or OAuth check.", evidence: mcp.map((m) => m.path).slice(0, 10) }
         : { status: "fail", summary: `${pluralise(mcp.length, "MCP server file")} and no Access or OAuth check found in the repository.`, evidence: mcp.map((m) => m.path).slice(0, 10) };
