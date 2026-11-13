@@ -11,7 +11,7 @@ export * from "./patterns.js";
 export * from "./answers.js";
 export { openaiChecks, anthropicChecks, aiGatewayChecks, cloudflareAccountChecks, repoChecks };
 
-export const CHECKS_VERSION = "2026.11.4";
+export const CHECKS_VERSION = "2026.11.5";
 
 /** Display names for providers, used wherever a result is shown to a person. */
 export const PROVIDER_LABEL: Record<Provider, string> = {
