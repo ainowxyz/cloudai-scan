@@ -108,6 +108,21 @@ describe("openai", () => {
     expect(status(projectLimit, "OAI-004").status).toBe("pass");
   });
 
+  it("a project without a hard limit needs review when the organization limit could not be read", () => {
+    const unread = openai({ orgSpendLimitCents: undefined, projects: [project({ spendLimitCents: 0 })] });
+    expect(status(unread, "OAI-004").status).toBe("needs_review");
+    expect(status(openai({ orgSpendLimitCents: 0, projects: [project({ spendLimitCents: 0 })] }), "OAI-004").status).toBe("fail");
+  });
+
+  it("a partial usage read is not published as the whole model inventory", () => {
+    const emptyPartial = openai({ modelsUsed30d: [], modelsUsed30dUnread: ["embeddings"] });
+    expect(status(emptyPartial, "OAI-010").status).toBe("unverifiable");
+    const partial = openai({ modelsUsed30d: ["gpt-5.5"], modelsUsed30dUnread: ["embeddings"] });
+    expect(status(partial, "OAI-010").summary).toMatch(/embeddings usage could not be read/);
+    const limits = openai({ modelsUsed30d: ["gpt-5.5"], modelsUsed30dUnread: ["embeddings"], projects: [project({ rateLimits: [{ model: "gpt-5.5", maxRequestsPer1Minute: 1 }, { model: "text-embedding-3-large", maxRequestsPer1Minute: 2 }] })] });
+    expect(status(limits, "OAI-009").observed).toHaveLength(2);
+  });
+
   it("an organization-level alert passes; a missing project alert with unread organization alerts needs review", () => {
     const orgAlert = openai({ orgSpendAlertCount: 2, projects: [project({ spendAlertCount: 0 })] });
     expect(status(orgAlert, "OAI-011").status).toBe("pass");

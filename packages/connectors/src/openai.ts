@@ -1,21 +1,23 @@
 import type { OpenAIFacts, OpenAIProjectFact } from "@cloudaisecurity/checks";
-import { daysAgoUnix, getJson, isoFromUnix, ProviderHttpError, type CollectResult, type Connector, type Credentials, type VerifyResult } from "./types.js";
+import { daysAgoUnix, getJson, incompleteList, isoFromUnix, ProviderHttpError, type CollectResult, type Connector, type Credentials, type VerifyResult } from "./types.js";
 
 const BASE = "https://api.openai.com/v1/organization";
 
 type Page<T> = { data: T[]; has_more?: boolean; last_id?: string };
 
-async function listAll<T>(path: string, headers: Record<string, string>, max = 1000): Promise<T[]> {
+/** Every page, up to `maxPages` of 100. A list with more, or one that says it has more but gives no cursor, throws instead of returning part. */
+async function listAll<T>(path: string, headers: Record<string, string>, maxPages = 10): Promise<T[]> {
   const out: T[] = [];
   let after: string | undefined;
-  for (let i = 0; i < 20 && out.length < max; i++) {
+  for (let i = 0; i < maxPages; i++) {
     const url = `${BASE}${path}${path.includes("?") ? "&" : "?"}limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`;
     const page = await getJson<Page<T>>(url, headers);
     out.push(...page.data);
-    if (!page.has_more || !page.last_id) break;
+    if (!page.has_more) return out;
+    if (!page.last_id) break;
     after = page.last_id;
   }
-  return out;
+  throw incompleteList(path.split("?")[0]!);
 }
 
 export const openaiConnector: Connector<"openai"> = {
@@ -140,7 +142,9 @@ export const openaiConnector: Connector<"openai"> = {
     const completions = await usageOf("completions");
     const embeddings = await usageOf("embeddings");
     const models = (u: typeof completions) => (u?.data ?? []).flatMap((b) => (b.results ?? []).map((r) => r.model).filter((m): m is string => !!m));
-    const modelsUsed30d = completions ? [...new Set([...models(completions), ...models(embeddings)])] : undefined;
+    // Each usage type read adds its models. One that could not be read is named, so the list is not taken as complete.
+    const modelsUsed30d = completions || embeddings ? [...new Set([...models(completions), ...models(embeddings)])] : undefined;
+    const modelsUsed30dUnread = modelsUsed30d && (!completions || !embeddings) ? [...(completions ? [] : ["completions"]), ...(embeddings ? [] : ["embeddings"])] : undefined;
 
     return {
       facts: {
@@ -152,6 +156,7 @@ export const openaiConnector: Connector<"openai"> = {
         users,
         invites,
         modelsUsed30d,
+        modelsUsed30dUnread,
         collectedAt: now.toISOString(),
       },
       errors,

@@ -124,7 +124,10 @@ export interface OpenAIFacts {
   projects?: OpenAIProjectFact[];
   users?: { id: string; email: string; role: "owner" | "member" | string; addedAt: string }[];
   invites?: { email: string; status: string; invitedAt: string }[];
+  /** Models in the usage data read. undefined = no usage type could be read. */
   modelsUsed30d?: string[];
+  /** Usage types ("completions", "embeddings") that could not be read, so modelsUsed30d may be missing their models. */
+  modelsUsed30dUnread?: string[];
   collectedAt: string;
 }
 

@@ -112,29 +112,59 @@ export function redact(text: string, secret?: string): string {
   return out.replace(SECRET_SHAPES, "[redacted]");
 }
 
-/** fetch wrapper: JSON in/out, allow-listed and read-only, never logs headers, maps non-2xx to ProviderHttpError with redacted text. */
-export async function getJson<T>(url: string, headers: Record<string, string>, init?: RequestInit): Promise<T> {
+/** How long one request may take, from sending it to the end of its body. */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * fetch wrapper: JSON in/out, allow-listed and read-only, never logs headers, maps non-2xx to ProviderHttpError with redacted text.
+ * The response and its body must both arrive within `timeoutMs`; a request that takes longer fails like any other unreadable endpoint.
+ */
+export async function getJson<T>(url: string, headers: Record<string, string>, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   assertReadOnly(url, method);
   if (method === "POST") assertQueryOnly(init?.body);
   const secret = (headers.authorization ?? headers["x-api-key"] ?? "").replace(/^Bearer\s+/i, "");
-  const res = await fetch(url, { ...init, method, redirect: "manual", headers: { accept: "application/json", ...headers, ...(init?.headers as Record<string, string> | undefined) } });
-  if (!res.ok) {
-    let msg = res.statusText;
-    try {
-      const body = (await res.json()) as any;
-      msg = body?.error?.message ?? body?.errors?.[0]?.message ?? body?.message ?? msg;
-    } catch {
-      /* ignore */
+  const endpoint = redact(url.split("?")[0]!, secret);
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The race settles even when fetch or the body ignores the abort signal.
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new ProviderHttpError(endpoint, 0, `No complete response within ${timeoutMs / 1000} seconds.`));
+    }, timeoutMs);
+  });
+  init?.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+  const request = async (): Promise<T> => {
+    const res = await fetch(url, { ...init, method, signal: controller.signal, redirect: "manual", headers: { accept: "application/json", ...headers, ...(init?.headers as Record<string, string> | undefined) } });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try {
+        const body = (await res.json()) as any;
+        msg = body?.error?.message ?? body?.errors?.[0]?.message ?? body?.message ?? msg;
+      } catch {
+        /* ignore */
+      }
+      throw new ProviderHttpError(endpoint, res.status, redact(String(msg), secret).slice(0, 300));
     }
-    throw new ProviderHttpError(redact(url.split("?")[0]!, secret), res.status, redact(String(msg), secret).slice(0, 300));
+    return (await res.json()) as T;
+  };
+  try {
+    return await Promise.race([request(), deadline]);
+  } finally {
+    clearTimeout(timer);
   }
-  return (await res.json()) as T;
+}
+
+/** A list endpoint had more items than this code reads. Returning the part read would look like the whole list. */
+export function incompleteList(what: string): Error {
+  return new Error(`${what} has more items than this scan reads; the list was not read rather than read in part.`);
 }
 
 /**
  * Every page of a Cloudflare v4 list endpoint (page / per_page pagination). One page is not the whole list:
- * stopping early would evaluate rules on part of the account. Stops at the last page, or after `maxPages`.
+ * stopping early would evaluate rules on part of the account. Stops at the last page. If more pages remain after
+ * `maxPages`, or a page comes back empty before the last, it throws instead of returning part of the list.
  */
 export async function cloudflareListAll<T>(url: string, headers: Record<string, string>, perPage = 50, maxPages = 20): Promise<T[]> {
   const out: T[] = [];
@@ -144,9 +174,10 @@ export async function cloudflareListAll<T>(url: string, headers: Record<string, 
     out.push(...items);
     const info = res.result_info;
     const last = info?.total_pages !== undefined ? page >= info.total_pages : info?.total_count !== undefined ? out.length >= info.total_count : items.length < perPage;
-    if (last || items.length === 0) break;
+    if (last) return out;
+    if (items.length === 0) break;
   }
-  return out;
+  throw incompleteList(url.replace(/^https:\/\/api\.cloudflare\.com\/client\/v4/, "").split("?")[0]!);
 }
 
 export function isoFromUnix(seconds: number | null | undefined): string | null {
