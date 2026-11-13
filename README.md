@@ -1,0 +1,91 @@
+# cloudai-scan
+
+The free local scanner from [Cloud AI Security](https://cloudaisecurity.com). Find ungoverned AI usage on Cloudflare, from your terminal or CI. No account needed for the repository scan; a read-only API token for the account scan. It runs on your machine and nothing is uploaded anywhere.
+
+```
+$ cloudai-scan repo .
+
+Repository /work/app (14 relevant files, 1 wrangler configs)  score 40/100  (2 pass, 3 fail, 0 unverifiable, 2 n/a)
+  fail          REPO-001  high   2 direct provider calls in source.
+      - src/llm.ts: api.openai.com
+      fix: Point the SDK's base URL at your AI Gateway …
+  fail          REPO-004  high   1 plaintext secret in wrangler configuration.
+      - wrangler.jsonc: OPENAI_API_KEY
+      fix: Remove the value from wrangler configuration, rotate the key …
+```
+
+## What it checks
+
+**Repository (`cloudai-scan repo [path]`)** — source and `wrangler.{toml,json,jsonc}`:
+
+| Rule | Severity | Finds |
+|---|---|---|
+| REPO-001 | high | direct calls to `api.openai.com`, `api.anthropic.com`, Gemini, Mistral, Cohere, OpenRouter, Groq… that bypass AI Gateway |
+| REPO-002 | medium | provider SDKs (`openai`, `@anthropic-ai/sdk`, `@google/genai`…) with no gateway base URL in the file |
+| REPO-003 | low | `env.AI.run()` without a gateway id |
+| REPO-004 | high | provider keys committed as plaintext `vars` |
+| REPO-005 | medium | MCP server code with no Access or OAuth check anywhere in the repo |
+| REPO-006 | low | AI Workers with observability off |
+| REPO-007 | info | provider key variable names (inventory) |
+
+**Account (`cloudai-scan account`)** — Workers, AI Gateway, zones and Access:
+
+| Rule | Severity | Finds |
+|---|---|---|
+| AIG-001…007 | high→info | unauthenticated gateways, prompt logging without DLP, no rate or spend limits, BYOK fallback, guardrails not configured, provider/model inventory |
+| WRK-001 | medium | Worker secrets named like provider API keys (names only; values are never read). A name match suggests a direct provider call; it does not prove one |
+| WRK-002 | low | AI Workers without observability |
+| WRK-003 | medium | AI Workers reachable only on `workers.dev` |
+| WRK-004 | high | MCP-looking Workers with no Cloudflare Access application. Reported as *needs review*, not as a failure: OAuth inside the Worker cannot be read from the account |
+| ZONE-001 | high | endpoints Cloudflare labelled `cf-llm` with no rate limiting rule |
+| ZONE-002 | medium | zones with LLM endpoints and neither Bot Fight Mode nor custom rules |
+| ACC-001 | info | AI surface inventory |
+
+Rules live in [`packages/checks`](packages/checks) (`@cloudaisecurity/checks`, MIT) and are the same code that powers [cloudaisecurity.com](https://cloudaisecurity.com/checks). Every result carries the API call and fields it was read from (`source`) and a sentence on what it does not show (`limits`).
+
+Results are one of:
+
+- `pass` / `fail`: the rule was evaluated against values read from the provider.
+- `needs_review`: something was read but cannot settle the rule alone. A person has to answer.
+- `unverifiable` (shown as "not readable"): the values could not be read. Never treated as a pass.
+- `not_applicable`: nothing exists for the rule to apply to. An empty account does not pass.
+
+## Install
+
+Until the packages are on npm, run from a clone:
+
+```bash
+git clone https://github.com/ainowxyz/cloudai-scan && cd cloudai-scan
+pnpm install && pnpm -r build
+node packages/cli/bin/cloudai-scan.mjs repo /path/to/your/worker
+```
+
+Account scan:
+
+```bash
+export CLOUDFLARE_API_TOKEN=…   # read-only token, scope below
+export CLOUDFLARE_ACCOUNT_ID=…
+node packages/cli/bin/cloudai-scan.mjs account
+```
+
+Token scope (all read): **Account** Workers Scripts, AI Gateway, Account Analytics, Access: Apps and Policies. **Zone (all zones)** Zone, Workers Routes, Zone WAF, API Gateway, Bot Management. Anything the token cannot read shows up as *not readable* with the endpoint named.
+
+The connectors can only send `GET` requests to `api.openai.com/v1/organization`, `api.anthropic.com/v1/organizations` and `api.cloudflare.com/client/v4`, plus one read-only GraphQL analytics query. Any other request throws before it leaves (`assertReadOnly` in `packages/connectors/src/types.ts`), and credentials are redacted from error text.
+
+## CI
+
+```yaml
+- run: npx --yes github:ainowxyz/cloudai-scan repo . --fail-on high
+```
+
+`--fail-on high|medium|low|none` sets the exit-code threshold; `--json` prints machine-readable output.
+
+## Why
+
+AI Gateway, Access, rate limiting and Workers Logs are all free. Most AI incidents on Workers are a Worker that calls a provider directly with a key in a secret, an MCP server nobody put behind Access, or an LLM endpoint with no rate limit. This tool finds those in a minute.
+
+## Local scanner and hosted product
+
+`cloudai-scan` is the local tool: it reads a repository or one Cloudflare account, prints results, and sends nothing to us. [Cloud AI Security](https://cloudaisecurity.com) is the hosted product: it runs the same published rules on a schedule, adds OpenAI and Anthropic organization checks, keeps history, and turns results into a dated trust page and an AI questionnaire appendix. Both produce configuration evidence, not an audit, certification or runtime protection.
+
+MIT © AINOW Group OÜ
