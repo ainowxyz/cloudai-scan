@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { expressionMatches } from "../src/cloudflare-account.js";
 import { isProviderHost, PROVIDER_KEY_NAME, runChecks, type CloudflareAccountFacts, type RepoFacts } from "../src/index.js";
 
 const NOW = "2026-11-03T00:00:00.000Z";
@@ -67,6 +68,66 @@ describe("cloudflare account checks", () => {
     expect(counted.find((x) => x.id === "ZONE-001")?.status).toBe("needs_review");
   });
   it("counts inventory", () => expect(by("ACC-001").summary).toContain("1 AI Worker"));
+
+  const unreadWorker = { name: "unread", bindings: [], secretNames: [], routes: [], customDomains: [], settingsReadable: false };
+  it("a Worker whose settings could not be read is not counted as having no secrets or bindings", () => {
+    const blind = runChecks("cloudflare-account", { ...facts, workers: [unreadWorker], zones: [] });
+    for (const id of ["WRK-001", "WRK-002", "WRK-003", "WRK-004"]) expect(blind.find((x) => x.id === id)?.status, id).toBe("unverifiable");
+    expect(blind.find((x) => x.id === "ACC-001")?.observed[0]).toMatch(/settings not readable for 1 of 1 Worker/);
+    const mixed = runChecks("cloudflare-account", { ...facts, workers: [{ ...facts.workers![0]!, secretNames: [] }, unreadWorker] });
+    expect(mixed.find((x) => x.id === "WRK-001")?.status).toBe("unverifiable");
+    expect(mixed.find((x) => x.id === "WRK-003")?.status).toBe("unverifiable");
+    const failing = runChecks("cloudflare-account", { ...facts, workers: [...facts.workers!, unreadWorker] });
+    expect(failing.find((x) => x.id === "WRK-001")?.status).toBe("fail");
+  });
+
+  it("an Access application limited to a path does not cover the whole host", () => {
+    const mcp = [{ ...facts.workers![1]!, workersDevEnabled: false }];
+    const scoped = runChecks("cloudflare-account", { ...facts, workers: mcp, accessHostnames: ["mcp.example.com/admin/*"] });
+    expect(scoped.find((x) => x.id === "WRK-004")?.status).toBe("needs_review");
+    const whole = runChecks("cloudflare-account", { ...facts, workers: mcp, accessHostnames: ["MCP.example.com/*"] });
+    expect(whole.find((x) => x.id === "WRK-004")?.status).toBe("pass");
+  });
+
+  const zone = (rateLimitExpressions: string[]) => ({ ...facts.zones![0]!, rateLimitExpressions, botFightMode: true });
+  const zone001 = (rateLimitExpressions: string[]) => runChecks("cloudflare-account", { ...facts, zones: [zone(rateLimitExpressions)] }).find((x) => x.id === "ZONE-001")!.status;
+  it("ZONE-001 passes only on a rule that matches the endpoint, never on one that excludes it", () => {
+    expect(zone001(['(http.request.uri.path eq "/api/chat")'])).toBe("pass");
+    expect(zone001(['not (http.request.uri.path eq "/api/chat")'])).toBe("fail");
+    expect(zone001(['(http.request.uri.path eq "/api/chat" and http.host eq "other.example.com")'])).toBe("fail");
+    expect(zone001(['(http.request.uri.path eq "/api/chat" and http.request.method eq "GET")'])).toBe("fail");
+    expect(zone001(['(http.request.uri.path matches "^/api/chat$")'])).toBe("needs_review");
+    expect(zone001(["true"])).toBe("pass");
+  });
+
+  it("an unread label on one zone keeps ZONE-001 and ZONE-002 from passing for every zone", () => {
+    const mixed = runChecks("cloudflare-account", {
+      ...facts,
+      zones: [zone(['(http.request.uri.path eq "/api/chat")']), { id: "z2", name: "other.example", rateLimitExpressions: [], customRuleExpressions: [], botFightMode: false }],
+    });
+    expect(mixed.find((x) => x.id === "ZONE-001")?.status).toBe("unverifiable");
+    expect(mixed.find((x) => x.id === "ZONE-002")?.status).toBe("unverifiable");
+  });
+});
+
+describe("rule expressions", () => {
+  const op = { method: "POST", host: "app.example.com", endpoint: "/api/chat" };
+  it("reads path, host and method conditions with and, or and not", () => {
+    expect(expressionMatches('http.request.uri.path in {"/api/chat" "/api/complete"}', op)).toBe(true);
+    expect(expressionMatches('starts_with(http.request.uri.path, "/api/")', op)).toBe(true);
+    expect(expressionMatches('http.request.uri.path contains "/chat" && http.host == "APP.example.com"', op)).toBe(true);
+    expect(expressionMatches('(http.request.uri.path eq "/other") or (http.request.method eq "POST")', op)).toBe(true);
+    expect(expressionMatches('http.request.uri.path ne "/api/chat"', op)).toBe(false);
+    expect(expressionMatches('http.request.method in {"GET" "HEAD"}', op)).toBe(false);
+  });
+  it("cannot settle what it does not read", () => {
+    expect(expressionMatches('http.request.uri.path eq "/api/chat" and cf.threat_score gt 10', op)).toBeUndefined();
+    expect(expressionMatches('lower(http.request.uri.path) eq "/api/chat"', op)).toBeUndefined();
+    expect(expressionMatches("http.request.uri.path in $llm_paths", op)).toBeUndefined();
+    expect(expressionMatches('http.request.uri.path eq "/api/chat" and', op)).toBeUndefined();
+    expect(expressionMatches('http.request.uri.path eq "/x" or ip.src in {10.0.0.0/8}', op)).toBeUndefined();
+    expect(expressionMatches('http.request.uri.path eq "/x" and ip.src in {10.0.0.0/8}', op)).toBe(false);
+  });
 });
 
 describe("repo checks", () => {

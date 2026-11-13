@@ -342,7 +342,7 @@ describe("cloudflare account connector", () => {
     expect(r.facts.zones![0]!.llmOperations).toEqual([{ method: "POST", host: "app.example.com", endpoint: "/api/chat" }]);
     expect(r.facts.zones![0]!.rateLimitExpressions).toEqual([]);
     expect(r.facts.zones![0]!.customRuleExpressions).toEqual([]);
-    expect(r.facts.accessHostnames).toEqual(["admin.example.com"]);
+    expect(r.facts.accessHostnames).toEqual(["admin.example.com/path"]);
     expect(r.errors).toEqual([]);
   });
 
@@ -363,6 +363,26 @@ describe("cloudflare account connector", () => {
     expect(r.facts.zones![0]!.llmOperations).toBeUndefined();
     expect(r.errors.map((e) => e.endpoint)).toEqual(["GET /zones/z1/api_gateway/labels/managed/cf-llm"]);
     expect(calls.some((c) => c.url.includes("feature=label") || c.url.includes("per_page=200"))).toBe(false);
+  });
+
+  it("lists every Worker, and marks those whose settings were not read instead of reading them as empty", async () => {
+    const ids = Array.from({ length: 201 }, (_, i) => ({ id: `w${i}` }));
+    mockFetch((url) => {
+      if (url.includes("/workers/scripts/w0/settings")) return { status: 403, body: { errors: [{ message: "forbidden" }] } };
+      if (/\/workers\/scripts\/w\d+\/settings/.test(url)) return { body: { success: true, result: { bindings: [] } } };
+      if (url.includes("/subdomain")) return { body: { success: true, result: { enabled: false } } };
+      if (url.includes("/workers/scripts")) return { body: { success: true, result: ids } };
+      if (url.includes("/workers/domains")) return { body: { success: true, result: [] } };
+      if (url.includes("/zones?")) return { body: { success: true, result: [] } };
+      if (url.includes("/access/apps")) return { body: { success: true, result: [] } };
+      return undefined;
+    });
+    const r = await cloudflareAccountConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW);
+    expect(r.facts.workers).toHaveLength(201);
+    expect(r.facts.workers![0]!.settingsReadable).toBe(false);
+    expect(r.facts.workers![1]!.settingsReadable).toBeUndefined();
+    expect(r.facts.workers![200]).toMatchObject({ name: "w200", settingsReadable: false });
+    expect(r.errors.some((e) => /first 200 of 201 Workers/.test(e.message))).toBe(true);
   });
 
   it("reads zero labelled endpoints as zero", async () => {

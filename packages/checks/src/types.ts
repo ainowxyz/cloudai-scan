@@ -182,6 +182,8 @@ export interface WorkerFact {
   customDomains: string[];
   workersDevEnabled?: boolean;
   observabilityEnabled?: boolean;
+  /** false = the settings could not be read: bindings and secretNames are then unknown, not empty. */
+  settingsReadable?: boolean;
 }
 
 export interface ZoneFact {
@@ -205,7 +207,7 @@ export interface ZoneFact {
 export interface CloudflareAccountFacts {
   workers?: WorkerFact[];
   zones?: ZoneFact[];
-  /** Hostnames protected by Cloudflare Access applications. undefined = not readable. */
+  /** Domains of Cloudflare Access applications, with the path when an application is limited to one (host/admin/*). undefined = not readable. */
   accessHostnames?: string[];
   collectedAt: string;
 }

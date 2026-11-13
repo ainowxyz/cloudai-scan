@@ -5,6 +5,9 @@ const API = "https://api.cloudflare.com/client/v4";
 type CfList<T> = { success: boolean; result: T[]; result_info?: { total_count?: number; total_pages?: number } };
 type CfOne<T> = { success: boolean; result: T };
 
+/** Workers whose settings are read, two requests each. Workers beyond this are listed and marked unread. */
+const MAX_WORKERS = 200;
+
 /**
  * Inventory of AI-related surfaces in a Cloudflare account: Workers (bindings, secret names, routes),
  * zones (LLM-labelled operations, rate limiting and custom rules, Bot Fight Mode) and Access hostnames.
@@ -53,9 +56,11 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
     let workers: WorkerFact[] | undefined;
     if (scripts) {
       workers = [];
-      for (const s of scripts.slice(0, 200)) {
-        const settings = await attempt(`GET /workers/scripts/${s.id}/settings`, () => getJson<CfOne<any>>(`${API}/accounts/${acct}/workers/scripts/${s.id}/settings`, headers));
-        const subdomain = await attempt(`GET /workers/scripts/${s.id}/subdomain`, () => getJson<CfOne<{ enabled: boolean }>>(`${API}/accounts/${acct}/workers/scripts/${s.id}/subdomain`, headers));
+      // Every Worker is listed. Settings are read for the first MAX_WORKERS; the rest stay in the list, marked unread.
+      for (const [i, s] of scripts.entries()) {
+        const read = i < MAX_WORKERS;
+        const settings = read ? await attempt(`GET /workers/scripts/${s.id}/settings`, () => getJson<CfOne<any>>(`${API}/accounts/${acct}/workers/scripts/${s.id}/settings`, headers)) : undefined;
+        const subdomain = read ? await attempt(`GET /workers/scripts/${s.id}/subdomain`, () => getJson<CfOne<{ enabled: boolean }>>(`${API}/accounts/${acct}/workers/scripts/${s.id}/subdomain`, headers)) : undefined;
         const bindings: { type: string; name: string }[] = (settings?.result?.bindings ?? []).map((b: any) => ({ type: String(b.type), name: String(b.name ?? b.binding ?? "") }));
         workers.push({
           name: s.id,
@@ -66,8 +71,12 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
           customDomains: domains.filter((d: any) => d.service === s.id).map((d: any) => String(d.hostname)),
           workersDevEnabled: subdomain?.result?.enabled,
           observabilityEnabled: settings === undefined ? undefined : settings.result?.observability?.enabled === true,
+          // Without settings, no bindings and no secrets means "unknown", not "none".
+          ...(settings === undefined ? { settingsReadable: false } : {}),
         });
       }
+      if (scripts.length > MAX_WORKERS)
+        errors.push({ endpoint: "GET /workers/scripts/{script_name}/settings", status: 0, message: `Settings were read for the first ${MAX_WORKERS} of ${scripts.length} Workers; the other ${scripts.length - MAX_WORKERS} are counted but their bindings, secrets and workers.dev setting were not read.` });
     }
 
     // Zones
@@ -128,7 +137,8 @@ export const cloudflareAccountConnector: Connector<"cloudflare-account"> = {
 
     // Access applications
     const apps = await attempt("GET /access/apps", () => cloudflareListAll<any>(`${API}/accounts/${acct}/access/apps`, headers, 100));
-    const accessHostnames = apps ? apps.flatMap((a: any) => [a.domain, ...(a.self_hosted_domains ?? [])].filter(Boolean).map((d: string) => d.split("/")[0]!)) : undefined;
+    // Kept with their paths: an application for host/admin/* does not protect the rest of the host.
+    const accessHostnames = apps ? apps.flatMap((a: any) => [a.domain, ...(a.self_hosted_domains ?? [])].filter(Boolean).map((d: unknown) => String(d))) : undefined;
 
     return { facts: { workers, zones, accessHostnames, collectedAt: now.toISOString() }, errors, endpoints };
   },
