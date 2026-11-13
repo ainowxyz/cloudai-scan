@@ -230,7 +230,13 @@ export interface WranglerConfigFact {
   path: string;
   name: string | null;
   hasAiBinding: boolean;
+  /** The top-level observability.enabled setting. */
   observabilityEnabled: boolean | null;
+  /**
+   * Each environment with an AI binding (env null = the top level), with the observability setting that applies to it:
+   * its own, else the top-level one. The ai binding is not inherited by environments, so each is read on its own.
+   */
+  aiEnvironments: { env: string | null; observabilityEnabled: boolean | null }[];
   /** Plain vars whose value looks like a provider secret. Names only. */
   secretLikeVarNames: string[];
   /** Var names that look like provider key names, regardless of value. */
@@ -241,6 +247,8 @@ export interface RepoFacts {
   root: string;
   files: RepoFileFact[];
   wrangler: WranglerConfigFact[];
+  /** What the scan did not examine, with the reason (a file too large, a directory not readable, the file limit). Empty = nothing was left out. */
+  notScanned?: string[];
   collectedAt: string;
 }
 

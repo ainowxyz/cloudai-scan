@@ -64,7 +64,8 @@ export async function main(argv: string[]): Promise<number> {
 
   if (cmd === "repo") {
     const facts = await scanRepo(target ?? process.cwd());
-    sections.push({ title: `Repository ${facts.root} (${facts.files.length} relevant files, ${facts.wrangler.length} wrangler configs)`, results: runChecks("repo", facts) });
+    const skipped = facts.notScanned?.length ? `, ${facts.notScanned.length} not scanned` : "";
+    sections.push({ title: `Repository ${facts.root} (${facts.files.length} relevant files, ${facts.wrangler.length} wrangler configs${skipped})`, results: runChecks("repo", facts) });
   } else if (cmd === "account") {
     const secret = arg(argv, "--token") ?? process.env.CLOUDFLARE_API_TOKEN;
     const accountId = arg(argv, "--account") ?? process.env.CLOUDFLARE_ACCOUNT_ID;

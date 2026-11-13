@@ -15,6 +15,20 @@ Fixes from a code review (#1). Rule outcomes change for OAI-002, OAI-003, ANT-00
 - OAI-009 matches a used model to its own limits and dated snapshots only (`gpt-4o-mini` no longer counts `gpt-4o` as used), and its summary counts every model, not only the 12 listed.
 - Answers: a statement of `N.A.` is read as not applicable.
 
+Fixes from the whole-codebase review (#3, #4). Rule outcomes change for WRK-001 to WRK-004, ZONE-001, ZONE-002, ACC-001, OAI-004, OAI-009, OAI-010 and REPO-001 to REPO-006; the rules version is not bumped here.
+
+- Cloudflare account: a Worker whose settings could not be read is marked `settingsReadable: false`. WRK-001 to WRK-004 no longer pass, or call themselves not applicable, on its empty bindings and secrets, and ACC-001 says how many Workers could not be classified.
+- Cloudflare account: every Worker is listed. Settings are still read for the first 200 only; the rest are marked unread and an error says so, instead of being dropped from the account.
+- Cloudflare account: Access application domains keep their path. WRK-004 counts only an application for the whole host (`host` or `host/*`) as covering it.
+- ZONE-001 reads rate limiting rule expressions for the endpoint's path, host and method, with `and`, `or` and `not`, instead of looking for the path as text. A rule that excludes the endpoint, or is limited to another host or method, no longer counts; an expression it cannot settle is Needs review.
+- ZONE-001 and ZONE-002 do not pass when the LLM labels of some zone could not be read.
+- OAI-004: a project without a hard limit is Needs review, not Fail, when the organization limit could not be read.
+- OpenAI: models from embeddings usage are kept when completions usage cannot be read, and the reverse. `modelsUsed30dUnread` names the usage type not read; OAI-010 says the list may be incomplete and OAI-009 does not narrow its list on a partial read.
+- Connectors: every request must complete, body included, within 30 seconds; one that does not fails like any unreadable endpoint and the collection goes on.
+- Connectors: a list longer than the page bound, or one that says more remain without giving a cursor, is reported as not readable instead of returned in part (Cloudflare, OpenAI and Anthropic).
+- Repository scan: only source and wrangler files count toward the 5,000-file limit. Files too large, unreadable files and directories, unparsable wrangler files and the limit itself are listed in `notScanned`; REPO-001 to REPO-006 do not pass or call themselves not applicable when anything was left out.
+- REPO-006 pairs each environment's AI binding with the observability setting that applies to it (its own, else the top-level one).
+
 ## 0.2.5 — 2026-11-11
 
 - OAI-009 also returns its values as a table (`table`: one row per model, with requests and tokens per minute as named columns). `observed` is unchanged and says the same thing; the table is for display, so a reader does not have to take a sentence apart. Answers carry it through as `ObservedLine.table`, with `who` naming the account.

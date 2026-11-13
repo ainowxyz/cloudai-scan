@@ -138,7 +138,7 @@ describe("repo checks", () => {
       { path: "src/summarise.ts", imports: [], hosts: [], hasAiRun: true, hasGatewayRef: true, hasMcpServer: false, hasAccessCheck: false },
       { path: "src/mcp.ts", imports: ["@modelcontextprotocol/sdk/server/mcp.js"], hosts: [], hasAiRun: false, hasGatewayRef: false, hasMcpServer: true, hasAccessCheck: false },
     ],
-    wrangler: [{ path: "wrangler.jsonc", name: "app", hasAiBinding: true, observabilityEnabled: null, secretLikeVarNames: ["OPENAI_API_KEY"], providerKeyVarNames: ["OPENAI_API_KEY"] }],
+    wrangler: [{ path: "wrangler.jsonc", name: "app", hasAiBinding: true, observabilityEnabled: null, aiEnvironments: [{ env: null, observabilityEnabled: null }], secretLikeVarNames: ["OPENAI_API_KEY"], providerKeyVarNames: ["OPENAI_API_KEY"] }],
     collectedAt: NOW,
   };
   const r = runChecks("repo", facts);
@@ -151,6 +151,20 @@ describe("repo checks", () => {
     expect(by("REPO-004").status).toBe("fail");
     expect(by("REPO-005").status).toBe("fail");
     expect(by("REPO-006").status).toBe("fail");
+  });
+
+  it("a scan that left part of the repository out does not pass or call a rule not applicable", () => {
+    const partial = runChecks("repo", { root: "/tmp/app", files: [], wrangler: [], notScanned: ["src/big.js: larger than 512 KB"], collectedAt: NOW });
+    for (const id of ["REPO-001", "REPO-002", "REPO-003", "REPO-004", "REPO-005", "REPO-006"]) expect(partial.find((x) => x.id === id)?.status, id).toBe("unverifiable");
+    expect(runChecks("repo", { ...facts, notScanned: ["src/big.js: larger than 512 KB"] }).find((x) => x.id === "REPO-001")?.status).toBe("fail");
+  });
+
+  it("REPO-006 pairs each environment's AI binding with the logging setting that applies to it", () => {
+    const wrangler = (aiEnvironments: RepoFacts["wrangler"][number]["aiEnvironments"]) => runChecks("repo", { ...facts, wrangler: [{ ...facts.wrangler[0]!, aiEnvironments }] }).find((x) => x.id === "REPO-006")!;
+    const off = wrangler([{ env: "production", observabilityEnabled: false }]);
+    expect(off.status).toBe("fail");
+    expect(off.evidence).toEqual(["wrangler.jsonc (app), env production"]);
+    expect(wrangler([{ env: "production", observabilityEnabled: true }]).status).toBe("pass");
   });
 });
 
