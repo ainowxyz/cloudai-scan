@@ -124,7 +124,10 @@ export interface OpenAIFacts {
   projects?: OpenAIProjectFact[];
   users?: { id: string; email: string; role: "owner" | "member" | string; addedAt: string }[];
   invites?: { email: string; status: string; invitedAt: string }[];
+  /** Models in the usage data read. undefined = no usage type could be read. */
   modelsUsed30d?: string[];
+  /** Usage types ("completions", "embeddings") that could not be read, so modelsUsed30d may be missing their models. */
+  modelsUsed30dUnread?: string[];
   collectedAt: string;
 }
 
@@ -179,6 +182,8 @@ export interface WorkerFact {
   customDomains: string[];
   workersDevEnabled?: boolean;
   observabilityEnabled?: boolean;
+  /** false = the settings could not be read: bindings and secretNames are then unknown, not empty. */
+  settingsReadable?: boolean;
 }
 
 export interface ZoneFact {
@@ -202,7 +207,7 @@ export interface ZoneFact {
 export interface CloudflareAccountFacts {
   workers?: WorkerFact[];
   zones?: ZoneFact[];
-  /** Hostnames protected by Cloudflare Access applications. undefined = not readable. */
+  /** Domains of Cloudflare Access applications, with the path when an application is limited to one (host/admin/*). undefined = not readable. */
   accessHostnames?: string[];
   collectedAt: string;
 }
@@ -225,7 +230,13 @@ export interface WranglerConfigFact {
   path: string;
   name: string | null;
   hasAiBinding: boolean;
+  /** The top-level observability.enabled setting. */
   observabilityEnabled: boolean | null;
+  /**
+   * Each environment with an AI binding (env null = the top level), with the observability setting that applies to it:
+   * its own, else the top-level one. The ai binding is not inherited by environments, so each is read on its own.
+   */
+  aiEnvironments: { env: string | null; observabilityEnabled: boolean | null }[];
   /** Plain vars whose value looks like a provider secret. Names only. */
   secretLikeVarNames: string[];
   /** Var names that look like provider key names, regardless of value. */
@@ -236,6 +247,8 @@ export interface RepoFacts {
   root: string;
   files: RepoFileFact[];
   wrangler: WranglerConfigFact[];
+  /** What the scan did not examine, with the reason (a file too large, a directory not readable, the file limit). Empty = nothing was left out. */
+  notScanned?: string[];
   collectedAt: string;
 }
 

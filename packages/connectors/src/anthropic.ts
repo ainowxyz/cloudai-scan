@@ -1,5 +1,5 @@
 import type { AnthropicFacts } from "@cloudaisecurity/checks";
-import { getJson, ProviderHttpError, type CollectResult, type Connector, type Credentials, type VerifyResult } from "./types.js";
+import { getJson, incompleteList, ProviderHttpError, type CollectResult, type Connector, type Credentials, type VerifyResult } from "./types.js";
 
 const BASE = "https://api.anthropic.com/v1/organizations";
 const VERSION = "2023-06-01";
@@ -12,30 +12,33 @@ function headersFor(secret: string, beta?: string): Record<string, string> {
   return { "x-api-key": secret, "anthropic-version": VERSION, ...(beta ? { "anthropic-beta": beta } : {}) };
 }
 
-async function listAll<T>(path: string, headers: Record<string, string>): Promise<T[]> {
+/** Every page, up to `maxPages`. A list with more, or one that says it has more but gives no cursor, throws instead of returning part. */
+async function listAll<T>(path: string, headers: Record<string, string>, maxPages = 20): Promise<T[]> {
   const out: T[] = [];
   let after: string | null | undefined;
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < maxPages; i++) {
     const url = `${BASE}${path}${path.includes("?") ? "&" : "?"}limit=100${after ? `&after_id=${encodeURIComponent(after)}` : ""}`;
     const page = await getJson<Page<T>>(url, headers);
     out.push(...page.data);
-    if (!page.has_more || !page.last_id) break;
+    if (!page.has_more) return out;
+    if (!page.last_id) break;
     after = page.last_id;
   }
-  return out;
+  throw incompleteList(path.split("?")[0]!);
 }
 
-/** Cursor pagination used by the analytics and spend-limit endpoints. */
-async function pageAll<T>(path: string, headers: Record<string, string>): Promise<T[]> {
+/** Cursor pagination used by the analytics and spend-limit endpoints. Throws like listAll when it stops before the end. */
+async function pageAll<T>(path: string, headers: Record<string, string>, maxPages = 10): Promise<T[]> {
   const out: T[] = [];
   let page: string | null | undefined;
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < maxPages; i++) {
     const res = await getJson<{ data?: T[]; next_page?: string | null; has_more?: boolean }>(`${BASE}${path}${page ? `&page=${encodeURIComponent(page)}` : ""}`, headers);
     out.push(...(res.data ?? []));
-    if (!res.next_page || res.has_more === false) break;
+    if (res.has_more === false || (!res.next_page && res.has_more !== true)) return out;
+    if (!res.next_page) break;
     page = res.next_page;
   }
-  return out;
+  throw incompleteList(path.split("?")[0]!);
 }
 
 export const anthropicConnector: Connector<"anthropic"> = {

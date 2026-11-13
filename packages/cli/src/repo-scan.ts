@@ -16,21 +16,30 @@ const GATEWAY_RE = /gateway\s*:\s*\{|gateway\.ai\.cloudflare\.com|cf-aig-|\/ai-g
 const MCP_RE = /McpServer|McpAgent|@modelcontextprotocol|createMcpHandler|agents\/mcp|workers-mcp/;
 const ACCESS_RE = /cf-access-jwt-assertion|Cf-Access-Jwt-Assertion|cloudflareaccess\.com|OAuthProvider|workers-oauth-provider|requireAccess|access\.jwt|aud\s*:\s*env\.(ACCESS|POLICY)_AUD/i;
 
-async function walk(root: string, out: string[]): Promise<void> {
+const WRANGLER_RE = /^wrangler\.(toml|json|jsonc)$/;
+const relevant = (name: string) => SOURCE_EXT.has(path.extname(name)) || WRANGLER_RE.test(name);
+
+/** Collects source and wrangler files. Only those count toward MAX_FILES; anything left out is named in `notScanned`. */
+async function walk(root: string, out: string[], notScanned: string[]): Promise<void> {
   const stack = [root];
-  while (stack.length && out.length < MAX_FILES) {
+  while (stack.length) {
     const dir = stack.pop()!;
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
+      notScanned.push(`${path.relative(root, dir) || "."}: directory could not be read`);
       continue;
     }
     for (const e of entries) {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name)) stack.push(full);
-      } else if (e.isFile()) {
+      } else if (e.isFile() && relevant(e.name)) {
+        if (out.length >= MAX_FILES) {
+          notScanned.push(`stopped after ${MAX_FILES} source and configuration files; the rest of the repository was not scanned`);
+          return;
+        }
         out.push(full);
       }
     }
@@ -63,14 +72,18 @@ function collectWrangler(root: string, file: string, config: any): WranglerConfi
   const envs = [config, ...Object.values(config?.env ?? {})];
   // Every environment's vars are committed, so each is read on its own: an override in one env does not hide a value in another.
   const vars: [string, unknown][] = envs.flatMap((e: any) => Object.entries(e?.vars ?? {}));
-  const hasAiBinding = envs.some((e: any) => e?.ai?.binding);
-  const obs = config?.observability?.enabled;
+  const flag = (v: unknown) => (typeof v === "boolean" ? v : null);
+  const obs = flag(config?.observability?.enabled);
+  // The ai binding is not inherited by environments; observability is, unless the environment sets its own.
+  const scopes: [string | null, any][] = [[null, config], ...Object.entries<any>(config?.env ?? {})];
+  const aiEnvironments = scopes.filter(([, e]) => e?.ai?.binding).map(([env, e]) => ({ env, observabilityEnabled: flag(e?.observability?.enabled) ?? obs }));
   const names = [...new Set(vars.map(([n]) => n))];
   return {
     path: path.relative(root, file),
     name: typeof config?.name === "string" ? config.name : null,
-    hasAiBinding,
-    observabilityEnabled: typeof obs === "boolean" ? obs : null,
+    hasAiBinding: aiEnvironments.length > 0,
+    observabilityEnabled: obs,
+    aiEnvironments,
     secretLikeVarNames: [...new Set(vars.filter(([, v]) => typeof v === "string" && SECRET_VALUE.test(v.trim())).map(([n]) => n))],
     providerKeyVarNames: names.filter((n) => PROVIDER_KEY_NAME.test(n)),
   };
@@ -81,24 +94,26 @@ export async function scanRepo(root: string): Promise<RepoFacts> {
   const s = await stat(root).catch(() => null);
   if (!s?.isDirectory()) throw new Error(`Not a directory: ${root}`);
   const files: string[] = [];
-  await walk(root, files);
+  const notScanned: string[] = [];
+  await walk(root, files, notScanned);
   const facts: RepoFileFact[] = [];
   const wrangler: WranglerConfigFact[] = [];
   for (const f of files) {
-    const base = path.basename(f);
-    if (/^wrangler\.(toml|json|jsonc)$/.test(base)) {
+    const rel = path.relative(root, f);
+    if (WRANGLER_RE.test(path.basename(f))) {
       try {
         const text = await readFile(f, "utf8");
-        const cfg = base.endsWith(".toml") ? parseToml(text) : parseJsonc(text);
+        const cfg = f.endsWith(".toml") ? parseToml(text) : parseJsonc(text);
         wrangler.push(collectWrangler(root, f, cfg));
       } catch {
-        /* unparsable config: skip */
+        notScanned.push(`${rel}: could not be read or parsed`);
       }
       continue;
     }
-    if (!SOURCE_EXT.has(path.extname(f))) continue;
-    const r = await scanSource(root, f).catch(() => null);
-    if (r && (r.imports.length || r.hosts.length || r.hasAiRun || r.hasMcpServer || r.hasAccessCheck)) facts.push(r);
+    const r = await scanSource(root, f).catch(() => undefined);
+    if (r === undefined) notScanned.push(`${rel}: could not be read`);
+    else if (r === null) notScanned.push(`${rel}: larger than ${MAX_BYTES / 1024} KB`);
+    else if (r.imports.length || r.hosts.length || r.hasAiRun || r.hasMcpServer || r.hasAccessCheck) facts.push(r);
   }
-  return { root, files: facts, wrangler, collectedAt: new Date().toISOString() };
+  return { root, files: facts, wrangler, notScanned, collectedAt: new Date().toISOString() };
 }

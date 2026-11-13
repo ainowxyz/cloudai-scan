@@ -13,10 +13,163 @@ function hostOf(route: string): string {
   return route.replace(/^https?:\/\//, "").split("/")[0]!.replace(/^\*\./, "");
 }
 
+/** Workers whose settings could not be read: whether they are AI or MCP Workers is unknown. */
+const unclassified = (workers: WorkerFact[]) => workers.filter((w) => w.settingsReadable === false).length;
+const settingsUnread = (n: number) => `Settings could not be read for ${pluralise(n, "Worker")}, so ${agree(n, "it", "they")} could not be classified.`;
+
+/** Hosts an Access application protects in full. One limited to a path (host/admin/*) covers only that path, so it is left out. */
+function wholeHostAccess(domains: string[]): Set<string> {
+  return new Set(domains.map((d) => d.toLowerCase().replace(/\/\*?$/, "")).filter((d) => !d.includes("/")));
+}
+
+type Operation = { method: string; host: string; endpoint: string };
+
+/**
+ * Whether a rule expression in Cloudflare's Rules language matches requests to an operation: true, false, or undefined
+ * when this reader cannot tell. It knows the path, host and method fields with eq, ne, in, contains, starts_with and
+ * ends_with, combined with not, and, xor and or (in that order of precedence). Anything else (regular expressions,
+ * wildcards, lists, other fields) is undefined. Comparisons are case-sensitive, as Cloudflare's are. The method is the
+ * operation's, upper case. The host is compared lower case, as clients send it; a host literal with an upper-case letter
+ * matches only a client that sends that case, so it is undefined.
+ */
+const CONNECTIVE = /^(and|or|xor|&&|\|\||\^\^|\))$/;
+
+export function expressionMatches(expression: string, op: Operation): boolean | undefined {
+  const tokens = expression.match(/"(?:[^"\\]|\\.)*"|==|!=|<=|>=|&&|\|\||[(){},!]|[^\s(){},!"=]+/g) ?? [];
+  let i = 0;
+  const peek = () => tokens[i];
+  const next = () => tokens[i++];
+  const fail = (): never => {
+    throw new Error("unreadable expression");
+  };
+  const literal = (t: string | undefined): string => (t && t.startsWith('"') ? (JSON.parse(t) as string) : fail());
+  const valueOf = (field: string): string | undefined => {
+    if (field === "http.request.uri.path") return op.endpoint.includes("{") ? undefined : op.endpoint;
+    if (field === "http.host") return op.host.toLowerCase();
+    if (field === "http.request.method") return op.method.toUpperCase();
+    return undefined;
+  };
+  /** A literal compared as written, or undefined for a host literal whose case decides the match. */
+  const exact = (field: string, lit: string): string | undefined => (field === "http.host" && lit !== lit.toLowerCase() ? undefined : lit);
+  const and = (a: boolean | undefined, b: boolean | undefined) => (a === false || b === false ? false : a === true && b === true ? true : undefined);
+  const or = (a: boolean | undefined, b: boolean | undefined) => (a === true || b === true ? true : a === false && b === false ? false : undefined);
+  const primary = (): boolean | undefined => {
+    const t = next() ?? fail();
+    if (t === "(") {
+      const v = disjunction();
+      if (next() !== ")") fail();
+      return v;
+    }
+    if (t === "true") return true;
+    if (t === "false") return false;
+    if (peek() === "(") {
+      // A function call: starts_with(field, "x") and ends_with(field, "x") are read; any other is skipped as unknown.
+      next();
+      const args: string[] = [];
+      let depth = 1;
+      while (depth > 0) {
+        const a = next() ?? fail();
+        if (a === "(") depth++;
+        else if (a === ")") depth--;
+        if (depth > 0) args.push(a);
+      }
+      const fn = t.toLowerCase();
+      if ((fn === "starts_with" || fn === "ends_with") && args.length === 3 && args[1] === ",") {
+        const v = valueOf(args[0]!);
+        if (v === undefined) return undefined;
+        const lit = exact(args[0]!, literal(args[2]));
+        if (lit === undefined) return undefined;
+        return fn === "starts_with" ? v.startsWith(lit) : v.endsWith(lit);
+      }
+      // A function used as a value, such as lower(http.host) eq "x", is compared by nobody here.
+      if (peek() !== undefined && !CONNECTIVE.test(peek()!)) {
+        next();
+        skipOperand();
+      }
+      return undefined;
+    }
+    const operator = peek();
+    if (operator === undefined || CONNECTIVE.test(operator)) return undefined; // a bare boolean field
+    next();
+    const v = valueOf(t);
+    if (operator === "in") {
+      if (peek() !== "{") {
+        skipOperand(); // a named list such as $admin_paths
+        return undefined;
+      }
+      const set = skipOperand();
+      // Anything but strings in the set (a range, a number) is not read.
+      if (v === undefined || !set.every((a) => a.startsWith('"') || a === ",")) return undefined;
+      const members = set.filter((a) => a !== ",").map((a) => literal(a));
+      if (members.includes(v)) return true;
+      return members.every((a) => exact(t, a) !== undefined) ? false : undefined;
+    }
+    const rhs = next() ?? fail();
+    if (v === undefined || !rhs.startsWith('"')) return undefined;
+    const lit = exact(t, literal(rhs));
+    if (lit === undefined) return undefined;
+    if (operator === "eq" || operator === "==") return v === lit;
+    if (operator === "ne" || operator === "!=") return v !== lit;
+    if (operator === "contains") return v.includes(lit);
+    return undefined;
+  };
+  /** Consumes one operand: a single token, or a {...} set, whose inner tokens are returned. */
+  const skipOperand = (): string[] => {
+    const first = next() ?? fail();
+    if (first !== "{") return [first];
+    const inner: string[] = [];
+    for (let a = next(); a !== "}"; a = next()) inner.push(a ?? fail());
+    return inner;
+  };
+  const unary = (): boolean | undefined => {
+    if (peek() === "not" || peek() === "!") {
+      next();
+      const v = unary();
+      return v === undefined ? undefined : !v;
+    }
+    return primary();
+  };
+  const conjunction = (): boolean | undefined => {
+    let v = unary();
+    while (peek() === "and" || peek() === "&&") {
+      next();
+      v = and(v, unary());
+    }
+    return v;
+  };
+  const exclusive = (): boolean | undefined => {
+    let v = conjunction();
+    while (peek() === "xor" || peek() === "^^") {
+      next();
+      const w = conjunction();
+      v = v === undefined || w === undefined ? undefined : v !== w;
+    }
+    return v;
+  };
+  const disjunction = (): boolean | undefined => {
+    let v = exclusive();
+    while (peek() === "or" || peek() === "||") {
+      next();
+      v = or(v, exclusive());
+    }
+    return v;
+  };
+  try {
+    const v = disjunction();
+    return i === tokens.length ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const noWorkers = () => notReadable("Workers could not be read with this API token.");
 const noZones = () => notReadable("Zones could not be read with this API token.");
 const LABEL_SOURCE = "GET /zones/{zone_id}/api_gateway/labels/managed/cf-llm?with_mapped_resource_counts=true: result.mapped_resources.operations";
 const labelsUnread = (zones: ZoneFact[]) => zones.filter((z) => z.llmOperationCount === undefined).length;
+const labelsUnreadOn = (zones: ZoneFact[]) => {
+  const unread = labelsUnread(zones);
+  return unread > 0 ? notReadable(`Cloudflare's LLM endpoint labels could not be read for ${unread} of ${pluralise(zones.length, "zone")}, so not every zone could be checked.`) : undefined;
+};
 const noLabelled = (zones: ZoneFact[]) => {
   const unread = labelsUnread(zones);
   return unread > 0
@@ -42,9 +195,10 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
       const hits = f.workers.flatMap((w) => w.secretNames.filter((n) => PROVIDER_KEY_NAME.test(n)).map((n) => `${w.name}: ${n}`));
       const holders = new Set(hits.map((h) => h.split(":")[0])).size;
       const observed = [`${ofTotal(holders, f.workers.length, "Worker", "has", "have")} a secret named like a provider API key`];
-      return hits.length === 0
-        ? { status: "pass", summary: "No Worker secret is named like a provider API key.", evidence: [], observed }
-        : { status: "fail", summary: `${pluralise(hits.length, "Worker secret")} ${agree(hits.length, "is", "are")} named like a provider API key.`, evidence: hits.slice(0, 15), observed };
+      if (hits.length > 0) return { status: "fail", summary: `${pluralise(hits.length, "Worker secret")} ${agree(hits.length, "is", "are")} named like a provider API key.`, evidence: hits.slice(0, 15), observed };
+      const unread = unclassified(f.workers);
+      if (unread > 0) return notReadable(`Secret names could not be read for ${unread} of ${pluralise(f.workers.length, "Worker")}.`);
+      return { status: "pass", summary: "No Worker secret is named like a provider API key.", evidence: [], observed };
     },
   },
   {
@@ -61,12 +215,14 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     evaluate: (f) => {
       if (!f.workers) return noWorkers();
       const ai = f.workers.filter(isAiWorker);
-      if (ai.length === 0) return notApplicable("No Workers with an AI binding or provider-key secret found.");
+      const unread = unclassified(f.workers);
+      if (ai.length === 0) return unread > 0 ? notReadable(settingsUnread(unread)) : notApplicable("No Workers with an AI binding or provider-key secret found.");
       const known = ai.filter((w) => w.observabilityEnabled !== undefined);
       const off = known.filter((w) => !w.observabilityEnabled).map((w) => w.name);
       const observed = [`Workers Logs is on for ${known.length - off.length} of ${pluralise(ai.length, "AI Worker")}`];
       if (off.length > 0) return { status: "fail", summary: `${pluralise(off.length, "AI Worker")} ${agree(off.length, "has", "have")} observability off.`, evidence: off.slice(0, 15), observed };
       if (known.length < ai.length) return notReadable(`Observability settings could not be read for ${pluralise(ai.length - known.length, "AI Worker")}.`);
+      if (unread > 0) return notReadable(settingsUnread(unread));
       return { status: "pass", summary: ai.length === 1 ? "The AI Worker has observability on." : `All ${ai.length} AI Workers have observability on.`, evidence: [], observed };
     },
   },
@@ -84,12 +240,14 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     evaluate: (f) => {
       if (!f.workers) return noWorkers();
       const ai = f.workers.filter(isAiWorker);
-      if (ai.length === 0) return notApplicable("No Workers with an AI binding or provider-key secret found.");
+      const unread = unclassified(f.workers);
+      if (ai.length === 0) return unread > 0 ? notReadable(settingsUnread(unread)) : notApplicable("No Workers with an AI binding or provider-key secret found.");
       const known = ai.filter((w) => w.workersDevEnabled !== undefined);
       const exposed = known.filter((w) => w.workersDevEnabled && w.routes.length === 0 && w.customDomains.length === 0).map((w) => w.name);
       const observed = [`${exposed.length} of ${pluralise(ai.length, "AI Worker")} reachable only on workers.dev`];
       if (exposed.length > 0) return { status: "fail", summary: `${pluralise(exposed.length, "AI Worker")} ${agree(exposed.length, "is", "are")} reachable only on workers.dev.`, evidence: exposed.slice(0, 15), observed };
       if (known.length < ai.length) return notReadable(`workers.dev settings could not be read for ${pluralise(ai.length - known.length, "AI Worker")}.`);
+      if (unread > 0) return notReadable(settingsUnread(unread));
       return { status: "pass", summary: "Every AI Worker is served through a zone or has workers.dev disabled.", evidence: [], observed };
     },
   },
@@ -101,21 +259,24 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     severity: "high",
     source: "GET /accounts/{account_id}/access/apps: result[].domain, self_hosted_domains; Workers routes, custom domains and workers.dev setting",
     docsUrl: "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/",
-    limits: "When no Access application is found, this result says exactly that. It does not mean the server is unauthenticated: a server that implements its own OAuth flow is protected without Access. Add a note to the result describing the control in use.",
+    limits: "When no Access application is found, this result says exactly that. It does not mean the server is unauthenticated: a server that implements its own OAuth flow is protected without Access. Add a note to the result describing the control in use. An Access application limited to a path does not count as covering the hostname.",
     remediation: "Create a Cloudflare Access application for the MCP hostname, or require OAuth inside the server and record that in a note on this result.",
     answers: [],
     evaluate: (f) => {
       if (!f.workers) return noWorkers();
       const mcp = f.workers.filter((w) => looksLikeMcp(w.name) || w.bindings.some((b) => looksLikeMcp(b.name)));
-      if (mcp.length === 0) return notApplicable("No Workers look like MCP servers.");
+      // A Worker whose settings were not read may have MCP-like bindings.
+      const unread = f.workers.filter((w) => w.settingsReadable === false && !mcp.includes(w)).length;
+      if (mcp.length === 0) return unread > 0 ? notReadable(settingsUnread(unread)) : notApplicable("No Workers look like MCP servers.");
       if (f.accessHostnames === undefined) return notReadable(`${pluralise(mcp.length, "MCP-like Worker")} found; Access applications could not be read with this API token.`, mcp.map((w) => w.name));
-      const access = new Set(f.accessHostnames.map((h) => h.toLowerCase()));
+      const access = wholeHostAccess(f.accessHostnames);
       const open = mcp.filter((w) => {
         const hosts = [...w.routes.map(hostOf), ...w.customDomains];
         if (w.workersDevEnabled) return true;
         return hosts.length === 0 || hosts.some((h) => !access.has(h.toLowerCase()));
       });
       const observed = [`A Cloudflare Access application covers ${mcp.length - open.length} of ${pluralise(mcp.length, "MCP-like Worker")}`];
+      if (open.length === 0 && unread > 0) return notReadable(settingsUnread(unread), mcp.map((w) => w.name));
       return open.length === 0
         ? { status: "pass", summary: "Every MCP-like Worker hostname belongs to a Cloudflare Access application.", evidence: mcp.map((w) => w.name), observed }
         : {
@@ -130,11 +291,11 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
     id: "ZONE-001",
     provider: "cloudflare-account",
     title: "LLM endpoints have a rate limiting rule",
-    description: "Cloudflare labels endpoints that serve LLM traffic (the cf-llm label in API Shield). For each labelled endpoint this looks for an enabled rate limiting rule whose expression mentions its path or host.",
+    description: "Cloudflare labels endpoints that serve LLM traffic (the cf-llm label in API Shield). For each labelled endpoint this looks for an enabled rate limiting rule whose expression matches its path, host and method.",
     severity: "high",
     source: `${LABEL_SOURCE}; GET /zones/{zone_id}/rulesets/phases/http_ratelimit/entrypoint: rules[].expression, enabled`,
     docsUrl: "https://developers.cloudflare.com/waf/rate-limiting-rules/",
-    limits: "Covers only endpoints Cloudflare has labelled cf-llm. Where Cloudflare reports a count but not the endpoints, the result is Needs review. The match is on the rule expression text, so a rule that covers the endpoint in another way is not recognized, and rate limits implemented in the application itself are not read.",
+    limits: "Covers only endpoints Cloudflare has labelled cf-llm. Where Cloudflare reports a count but not the endpoints, the result is Needs review. Rule expressions are read for conditions on the endpoint's path, host and method; an expression this cannot settle, such as a regular expression or a list, is Needs review. Rate limits implemented in the application itself are not read.",
     remediation: "Create a rate limiting rule matching the endpoint path (1 rule is included on Free, 2 on Pro, 5 on Business).",
     answers: [{ framework: "generic-ai", itemId: "GAI-23" }],
     evaluate: (f) => {
@@ -152,6 +313,7 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
         };
       }
       const uncovered: string[] = [];
+      const unsettled: string[] = [];
       let total = 0;
       let unread = 0;
       for (const z of zones) {
@@ -161,13 +323,26 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
         }
         for (const op of z.llmOperations ?? []) {
           total++;
-          const covered = z.rateLimitExpressions.some((e) => e.includes(op.endpoint) || e.includes(op.host) || e.trim() === "true");
-          if (!covered) uncovered.push(`${z.name}: ${op.method} ${op.host}${op.endpoint}`);
+          const matches = z.rateLimitExpressions.map((e) => expressionMatches(e, op));
+          const name = `${z.name}: ${op.method} ${op.host}${op.endpoint}`;
+          if (matches.includes(true)) continue;
+          if (matches.includes(undefined)) unsettled.push(name);
+          else uncovered.push(name);
         }
       }
-      const observed = total ? [`${total - uncovered.length} of ${pluralise(total, "labelled LLM endpoint")} matched by a rate limiting rule`] : [];
+      const matched = total - uncovered.length - unsettled.length;
+      const observed = total ? [`${matched} of ${pluralise(total, "labelled LLM endpoint")} matched by a rate limiting rule`] : [];
       if (uncovered.length > 0) return { status: "fail", summary: `${pluralise(uncovered.length, "LLM endpoint")} ${agree(uncovered.length, "is", "are")} not matched by a rate limiting rule.`, evidence: uncovered.slice(0, 15), observed };
       if (unread > 0) return notReadable(`Rate limiting rules could not be read for ${pluralise(unread, "zone")}.`);
+      const labels = labelsUnreadOn(f.zones);
+      if (labels) return labels;
+      if (unsettled.length > 0)
+        return {
+          status: "needs_review",
+          summary: `${pluralise(unsettled.length, "LLM endpoint")} ${agree(unsettled.length, "has", "have")} rate limiting rules whose expressions could not be settled against ${agree(unsettled.length, "it", "them")}.`,
+          evidence: unsettled.slice(0, 15),
+          observed,
+        };
       return { status: "pass", summary: "Every labelled LLM endpoint is matched by a rate limiting rule.", evidence: [], observed };
     },
   },
@@ -191,6 +366,8 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
       const observed = [`${known.length - bare.length} of ${pluralise(zones.length, "zone")} with LLM endpoints ${agree(known.length - bare.length, "has", "have")} bot protection or a custom rule`];
       if (bare.length > 0) return { status: "fail", summary: `${pluralise(bare.length, "zone")} with LLM endpoints ${agree(bare.length, "has", "have")} neither bot protection nor a custom rule.`, evidence: bare, observed };
       if (known.length < zones.length) return notReadable(`Bot and custom rule settings could not be read for ${pluralise(zones.length - known.length, "zone")}.`);
+      const labels = labelsUnreadOn(f.zones);
+      if (labels) return labels;
       return { status: "pass", summary: "Every zone with LLM endpoints has bot protection or a custom rule.", evidence: [], observed };
     },
   },
@@ -214,7 +391,9 @@ export const cloudflareAccountChecks: CheckDefinition<CloudflareAccountFacts>[] 
       // Only zones whose labels were read are counted. Unread zones are said to be unread, never counted as zero.
       const endpoints = read === 0 ? "" : ` and ${pluralise(ops, "labelled LLM endpoint")} across ${pluralise(read, "zone")}`;
       const gap = unread === 0 ? "" : `; endpoint labels not readable on ${unread} of ${pluralise(f.zones.length, "zone")}`;
-      const text = `${pluralise(ai.length, "AI Worker")}${endpoints}${gap}`;
+      const unclassifiedWorkers = unclassified(f.workers);
+      const workerGap = unclassifiedWorkers === 0 ? "" : `; settings not readable for ${unclassifiedWorkers} of ${pluralise(f.workers.length, "Worker")}`;
+      const text = `${pluralise(ai.length, "AI Worker")}${endpoints}${gap}${workerGap}`;
       return { status: "pass", summary: `${text}.`, evidence: ai.map((w) => w.name).slice(0, 25), observed: [text] };
     },
   },

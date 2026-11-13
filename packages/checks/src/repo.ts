@@ -1,8 +1,20 @@
 import { GATEWAY_HOSTS, isProviderHost, MCP_PACKAGES, PROVIDER_SDKS } from "./patterns.js";
 import type { CheckDefinition, RepoFacts } from "./types.js";
-import { agree, pluralise } from "./util.js";
+import { agree, notReadable, pluralise } from "./util.js";
 
-export const repoChecks: CheckDefinition<RepoFacts>[] = [
+type Outcome = ReturnType<CheckDefinition<RepoFacts>["evaluate"]>;
+
+/** A pass or not applicable says nothing was found, which holds only if everything was scanned. Findings stand either way. */
+function scanned(f: RepoFacts, outcome: Outcome): Outcome {
+  const skipped = f.notScanned ?? [];
+  if (skipped.length === 0 || (outcome.status !== "pass" && outcome.status !== "not_applicable")) return outcome;
+  return notReadable(`Part of the repository was not scanned (${pluralise(skipped.length, "item")}), so this cannot be settled.`, skipped.slice(0, 20));
+}
+
+/** Rules whose pass or not applicable is a claim that something is absent from the whole repository. */
+const ABSENCE_RULES = new Set(["REPO-001", "REPO-002", "REPO-003", "REPO-004", "REPO-006"]);
+
+const rules: CheckDefinition<RepoFacts>[] = [
   {
     id: "REPO-001",
     provider: "repo",
@@ -87,7 +99,8 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     answers: [{ framework: "generic-ai", itemId: "GAI-14" }],
     evaluate: (f) => {
       const mcp = f.files.filter((file) => file.hasMcpServer || file.imports.some((i) => MCP_PACKAGES.some((m) => i === m || i.startsWith(m + "/"))));
-      if (mcp.length === 0) return { status: "not_applicable", summary: "No MCP server code found.", evidence: [] };
+      // A pass here rests on a check that was found, so only "none found" depends on the whole repository.
+      if (mcp.length === 0) return scanned(f, { status: "not_applicable", summary: "No MCP server code found.", evidence: [] });
       const anyAccess = f.files.some((file) => file.hasAccessCheck);
       return anyAccess
         ? { status: "pass", summary: "MCP server code is present alongside an Access or OAuth check.", evidence: mcp.map((m) => m.path).slice(0, 10) }
@@ -100,14 +113,15 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     title: "AI Workers enable observability in configuration",
     description: "Workers Logs should be on for any Worker with an AI binding.",
     severity: "low",
-    source: "wrangler.toml / wrangler.json(c): ai binding, observability.enabled",
+    source: "wrangler.toml / wrangler.json(c): ai binding and observability.enabled, top level and each env",
     limits: "Reads the wrangler configuration in the repository. The deployed Worker may differ.",
     remediation: "Add \"observability\": { \"enabled\": true } to the wrangler configuration.",
     answers: [{ framework: "generic-ai", itemId: "GAI-20" }],
     evaluate: (f) => {
-      const ai = f.wrangler.filter((w) => w.hasAiBinding);
+      const ai = f.wrangler.filter((w) => w.aiEnvironments.length > 0);
       if (ai.length === 0) return { status: "not_applicable", summary: "No wrangler configuration with an AI binding.", evidence: [] };
-      const off = ai.filter((w) => w.observabilityEnabled !== true).map((w) => `${w.path}${w.name ? ` (${w.name})` : ""}`);
+      // Each environment's AI binding is paired with the observability setting that applies to that environment.
+      const off = ai.flatMap((w) => w.aiEnvironments.filter((e) => e.observabilityEnabled !== true).map((e) => `${w.path}${w.name ? ` (${w.name})` : ""}${e.env ? `, env ${e.env}` : ""}`));
       return off.length === 0
         ? { status: "pass", summary: "All AI Workers enable observability.", evidence: [] }
         : { status: "fail", summary: `${pluralise(off.length, "AI Worker config")} without observability.`, evidence: off };
@@ -129,3 +143,5 @@ export const repoChecks: CheckDefinition<RepoFacts>[] = [
     },
   },
 ];
+
+export const repoChecks: CheckDefinition<RepoFacts>[] = rules.map((c) => (ABSENCE_RULES.has(c.id) ? { ...c, evaluate: (f: RepoFacts) => scanned(f, c.evaluate(f)) } : c));

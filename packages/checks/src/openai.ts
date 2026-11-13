@@ -108,7 +108,7 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     severity: "medium",
     source: "GET /v1/organization/spend_limit: threshold_amount; GET /v1/organization/projects/{project_id}/spend_limit: threshold_amount, enforcement.status",
     docsUrl: DOCS,
-    limits: "Shows whether a hard limit is configured. The amount is not published, and whether it is low enough for the organization's usage is a judgment this check cannot make.",
+    limits: "Shows whether a hard limit is configured. The amount is not published, and whether it is low enough for the organization's usage is a judgment this check cannot make. Where the organization limit cannot be read, the result is Needs review rather than Fail.",
     remediation: "Set an organization monthly spend limit, or a spend limit on every active project.",
     answers: [{ framework: "generic-ai", itemId: "GAI-22" }],
     evaluate: (f) => {
@@ -120,8 +120,15 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       const without = known.filter((p) => (p.spendLimitCents ?? 0) === 0);
       const observed = [`${ofTotal(known.length - without.length, known.length, "active project", "has", "have")} a hard spend limit`];
       if (without.length > 0) {
-        const org = f.orgSpendLimitCents === undefined ? "the organization limit could not be read" : "no organization limit is set";
-        return { status: "fail", summary: `${pluralise(without.length, "active project")} ${agree(without.length, "has", "have")} no hard spend limit, and ${org}.`, evidence: without.slice(0, 10).map((p) => p.name), observed };
+        // An organization limit covers every project. If it could not be read, a project without one settles nothing.
+        if (f.orgSpendLimitCents === undefined)
+          return {
+            status: "needs_review",
+            summary: `${pluralise(without.length, "active project")} ${agree(without.length, "has", "have")} no hard spend limit of ${agree(without.length, "its", "their")} own. The organization limit could not be read, so check it in the OpenAI dashboard.`,
+            evidence: without.slice(0, 10).map((p) => p.name),
+            observed,
+          };
+        return { status: "fail", summary: `${pluralise(without.length, "active project")} ${agree(without.length, "has", "have")} no hard spend limit, and no organization limit is set.`, evidence: without.slice(0, 10).map((p) => p.name), observed };
       }
       if (known.length < projects.length || known.length === 0) return notReadable("Spend limits could not be read with this admin key.");
       return { status: "pass", summary: "Every active project has a hard spend limit.", evidence: [], observed };
@@ -241,7 +248,8 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
       if (!projects) return notReadable("Projects could not be read with this admin key.");
       const limits = projects.flatMap((p) => p.rateLimits ?? []);
       if (limits.length === 0) return projects.some((p) => p.rateLimits === undefined) ? notReadable("Project rate limits could not be read with this admin key.") : notApplicable("No project rate limits were returned.");
-      const used = f.modelsUsed30d;
+      // A partial usage read would hide models that were used, so only a complete one narrows the list.
+      const used = f.modelsUsed30dUnread?.length ? undefined : f.modelsUsed30d;
       const models = [...new Set(limits.map((l) => l.model))].filter((m) => !used || used.some((u) => sameModel(u, m)));
       const range = (xs: number[]) => (xs.length === 0 ? null : Math.min(...xs) === Math.max(...xs) ? num(xs[0]!) : `${num(Math.min(...xs))} to ${num(Math.max(...xs))}`);
       // One row per model. The sentence form and the table are built from the same two values, so they cannot disagree.
@@ -270,6 +278,12 @@ export const openaiChecks: CheckDefinition<OpenAIFacts>[] = [
     answers: [{ framework: "generic-ai", itemId: "GAI-03" }, { framework: "generic-ai", itemId: "GAI-21" }],
     evaluate: (f) => {
       if (f.modelsUsed30d === undefined) return notReadable("Usage data could not be read with this admin key.");
+      const unread = f.modelsUsed30dUnread ?? [];
+      if (unread.length > 0) {
+        const gap = `${unread.join(" and ")} usage could not be read`;
+        if (f.modelsUsed30d.length === 0) return notReadable(`No models in the usage data that could be read; ${gap}.`);
+        return { status: "pass", summary: `${pluralise(f.modelsUsed30d.length, "model")} used in the last 30 days; ${gap}, so the list may be incomplete.`, evidence: [], observed: [`Models called in the last 30 days: ${f.modelsUsed30d.slice(0, 25).join(", ")}`, `Not read: ${unread.join(" and ")} usage`] };
+      }
       if (f.modelsUsed30d.length === 0) return { status: "pass", summary: "No model usage was recorded in the last 30 days.", evidence: [], observed: ["No models called in the last 30 days"] };
       return { status: "pass", summary: `${pluralise(f.modelsUsed30d.length, "model")} used in the last 30 days.`, evidence: [], observed: [`Models called in the last 30 days: ${f.modelsUsed30d.slice(0, 25).join(", ")}`] };
     },

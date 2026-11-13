@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,5 +45,44 @@ describe("wrangler configuration", () => {
     const facts = await scanRepo(dir);
     expect(facts.wrangler[0]!.secretLikeVarNames).toEqual(["OPENAI_API_KEY"]);
     expect(facts.wrangler[0]!.providerKeyVarNames).toEqual(["OPENAI_API_KEY"]);
+  });
+});
+
+describe("coverage", () => {
+  it("names an oversized source file as not scanned, so nothing passes on it", async () => {
+    await writeFile(path.join(dir, "big.ts"), `fetch("https://api.openai.com/v1")\n${"x".repeat(600 * 1024)}`);
+    const facts = await scanRepo(dir);
+    expect(facts.notScanned).toEqual(["big.ts: larger than 512 KB"]);
+    expect(await main(["repo", dir, "--json"])).toBe(0);
+    const results = JSON.parse(out).sections[0].results as { id: string; status: string }[];
+    expect(results.find((r) => r.id === "REPO-001")?.status).toBe("unverifiable");
+  });
+
+  it("does not count irrelevant files toward the file limit", async () => {
+    await mkdir(path.join(dir, "assets"));
+    await Promise.all(Array.from({ length: 5001 }, (_, i) => writeFile(path.join(dir, "assets", `${i}.png`), "")));
+    await writeFile(path.join(dir, "llm.ts"), `fetch("https://api.openai.com/v1")`);
+    const facts = await scanRepo(dir);
+    expect(facts.notScanned).toEqual([]);
+    expect(facts.files.map((f) => f.path)).toEqual(["llm.ts"]);
+  });
+
+  it("names a wrangler file it could not parse", async () => {
+    await writeFile(path.join(dir, "wrangler.toml"), "name = ");
+    expect((await scanRepo(dir)).notScanned).toEqual(["wrangler.toml: could not be read or parsed"]);
+  });
+});
+
+describe("wrangler environments", () => {
+  it("applies each environment's own logging setting to its AI binding, and inherits the top-level one otherwise", async () => {
+    await writeFile(
+      path.join(dir, "wrangler.jsonc"),
+      JSON.stringify({ name: "app", observability: { enabled: true }, env: { production: { ai: { binding: "AI" }, observability: { enabled: false } }, staging: { ai: { binding: "AI" } } } }),
+    );
+    const w = (await scanRepo(dir)).wrangler[0]!;
+    expect(w.aiEnvironments).toEqual([
+      { env: "production", observabilityEnabled: false },
+      { env: "staging", observabilityEnabled: true },
+    ]);
   });
 });

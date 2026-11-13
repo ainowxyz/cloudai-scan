@@ -49,6 +49,45 @@ describe("read-only allow-list", () => {
   });
 });
 
+describe("request deadline", () => {
+  it("fails a response whose body never finishes, and the collection goes on", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/users")) return { ok: true, status: 200, statusText: "OK", json: () => new Promise(() => {}) } as unknown as Response;
+        return new Response(JSON.stringify({ error: { message: "no route" } }), { status: 404 });
+      });
+      const pending = getJson("https://api.openai.com/v1/organization/users", { authorization: "Bearer sk-admin-test" }, undefined, 1000);
+      const settled = expect(pending).rejects.toThrow(/No complete response within 1 seconds/);
+      await vi.advanceTimersByTimeAsync(1000);
+      await settled;
+      const run = openaiConnector.collect({ secret: "sk-admin-test" }, NOW);
+      await vi.advanceTimersByTimeAsync(31_000);
+      const r = await run;
+      expect(r.facts.users).toBeUndefined();
+      expect(r.errors.find((e) => e.endpoint === "GET /users")?.message).toMatch(/No complete response/);
+      expect(r.endpoints).toContain("GET /usage/embeddings");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("cancellation", () => {
+  it("does not send a request whose signal was aborted before the call", async () => {
+    let sent = false;
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent = !init?.signal?.aborted;
+      if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
+      return new Response("{}", { status: 200 });
+    });
+    const signal = AbortSignal.abort();
+    await expect(getJson("https://api.openai.com/v1/organization/users", {}, { signal })).rejects.toThrow();
+    expect(sent).toBe(false);
+  });
+});
+
 describe("redaction", () => {
   it("removes the credential and key-shaped strings from error text", async () => {
     expect(redact("Incorrect API key provided: sk-admin-abc123XYZ987.", "sk-admin-abc123XYZ987")).toBe("Incorrect API key provided: [redacted].");
@@ -140,6 +179,30 @@ describe("openai connector", () => {
     expect(calls.filter((c) => c.url.includes("/users")).length).toBe(2);
   });
 
+  it("a list longer than the bound is not read, rather than read in part", async () => {
+    mockFetch((url) => (url.includes("/users") ? { body: { data: [{ id: "u", email: "a@b.c", role: "member", added_at: 1 }], has_more: true, last_id: "u" } } : undefined));
+    const r = await openaiConnector.collect({ secret: "sk-admin-test" }, NOW);
+    expect(r.facts.users).toBeUndefined();
+    expect(r.errors.find((e) => e.endpoint === "GET /users")?.message).toMatch(/more items than this scan reads/);
+  });
+
+  it("a page that says more remain but gives no cursor is not read as the end", async () => {
+    mockFetch((url) => (url.includes("/users") ? { body: { data: [{ id: "u", email: "a@b.c", role: "member", added_at: 1 }], has_more: true } } : undefined));
+    const r = await openaiConnector.collect({ secret: "sk-admin-test" }, NOW);
+    expect(r.facts.users).toBeUndefined();
+  });
+
+  it("names the usage type it could not read instead of publishing a partial model list as complete", async () => {
+    mockFetch((url) => (url.includes("/usage/completions") ? { body: { data: [] } } : undefined));
+    const r = await openaiConnector.collect({ secret: "sk-admin-test" }, NOW);
+    expect(r.facts.modelsUsed30d).toEqual([]);
+    expect(r.facts.modelsUsed30dUnread).toEqual(["embeddings"]);
+    mockFetch((url) => (url.includes("/usage/embeddings") ? { body: { data: [{ results: [{ model: "text-embedding-3-large" }] }] } } : undefined));
+    const e = await openaiConnector.collect({ secret: "sk-admin-test" }, NOW);
+    expect(e.facts.modelsUsed30d).toEqual(["text-embedding-3-large"]);
+    expect(e.facts.modelsUsed30dUnread).toEqual(["completions"]);
+  });
+
   it("missing permission leaves facts undefined, never empty", async () => {
     mockFetch(() => ({ status: 403, body: { error: { message: "insufficient permissions" } } }));
     const r = await openaiConnector.collect({ secret: "sk-admin-test" }, NOW);
@@ -203,6 +266,15 @@ describe("anthropic connector", () => {
     expect(readNothing(await anthropicConnector.collect({ secret: "sk-ant-admin-test" }, NOW))).toBe(false);
   });
 
+  it("a cursor list that says more remain but gives no cursor is not read as complete", async () => {
+    mockFetch((url) => {
+      if (url.includes("/spend_limits")) return { body: { data: [{ scope: { type: "organization" }, amount: 100 }], has_more: true, next_page: null } };
+      return undefined;
+    });
+    const r = await anthropicConnector.collect({ secret: "sk-ant-admin-test" }, NOW);
+    expect(r.facts.spendLimits).toBeUndefined();
+  });
+
   it("an unreadable usage or spend endpoint stays undefined", async () => {
     mockFetch((url) => (url.includes("/users") ? { body: { data: [], has_more: false } } : { status: 403, body: { error: { message: "no access" } } }));
     const r = await anthropicConnector.collect({ secret: "sk-ant-admin-test" }, NOW);
@@ -236,6 +308,16 @@ describe("cloudflare ai gateway connector", () => {
     expect((await cloudflareAiGatewayConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW)).facts.gateways).toBeUndefined();
     mockFetch((url) => (url.includes("/ai-gateway/gateways") ? { body: { success: true, result: [] } } : undefined));
     expect((await cloudflareAiGatewayConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW)).facts.gateways).toEqual([]);
+  });
+
+  it("a gateway list longer than the page bound is not read, rather than read in part", async () => {
+    mockFetch((url) => {
+      if (url.includes("/ai-gateway/gateways?")) return { body: { success: true, result: [{ id: "gw" }], result_info: { per_page: 1, total_pages: 25 } } };
+      return undefined;
+    });
+    const r = await cloudflareAiGatewayConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW);
+    expect(r.facts.gateways).toBeUndefined();
+    expect(r.errors.find((e) => e.endpoint === "GET /ai-gateway/gateways")?.message).toMatch(/more items than this scan reads/);
   });
 
   it("reads every page of the gateway list", async () => {
@@ -274,7 +356,7 @@ describe("cloudflare account connector", () => {
     expect(r.facts.zones![0]!.llmOperations).toEqual([{ method: "POST", host: "app.example.com", endpoint: "/api/chat" }]);
     expect(r.facts.zones![0]!.rateLimitExpressions).toEqual([]);
     expect(r.facts.zones![0]!.customRuleExpressions).toEqual([]);
-    expect(r.facts.accessHostnames).toEqual(["admin.example.com"]);
+    expect(r.facts.accessHostnames).toEqual(["admin.example.com/path"]);
     expect(r.errors).toEqual([]);
   });
 
@@ -295,6 +377,26 @@ describe("cloudflare account connector", () => {
     expect(r.facts.zones![0]!.llmOperations).toBeUndefined();
     expect(r.errors.map((e) => e.endpoint)).toEqual(["GET /zones/z1/api_gateway/labels/managed/cf-llm"]);
     expect(calls.some((c) => c.url.includes("feature=label") || c.url.includes("per_page=200"))).toBe(false);
+  });
+
+  it("lists every Worker, and marks those whose settings were not read instead of reading them as empty", async () => {
+    const ids = Array.from({ length: 201 }, (_, i) => ({ id: `w${i}` }));
+    mockFetch((url) => {
+      if (url.includes("/workers/scripts/w0/settings")) return { status: 403, body: { errors: [{ message: "forbidden" }] } };
+      if (/\/workers\/scripts\/w\d+\/settings/.test(url)) return { body: { success: true, result: { bindings: [] } } };
+      if (url.includes("/subdomain")) return { body: { success: true, result: { enabled: false } } };
+      if (url.includes("/workers/scripts")) return { body: { success: true, result: ids } };
+      if (url.includes("/workers/domains")) return { body: { success: true, result: [] } };
+      if (url.includes("/zones?")) return { body: { success: true, result: [] } };
+      if (url.includes("/access/apps")) return { body: { success: true, result: [] } };
+      return undefined;
+    });
+    const r = await cloudflareAccountConnector.collect({ secret: "cf-token-value", accountId: "acct" }, NOW);
+    expect(r.facts.workers).toHaveLength(201);
+    expect(r.facts.workers![0]!.settingsReadable).toBe(false);
+    expect(r.facts.workers![1]!.settingsReadable).toBeUndefined();
+    expect(r.facts.workers![200]).toMatchObject({ name: "w200", settingsReadable: false });
+    expect(r.errors.some((e) => /first 200 of 201 Workers/.test(e.message))).toBe(true);
   });
 
   it("reads zero labelled endpoints as zero", async () => {
